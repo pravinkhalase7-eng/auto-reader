@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import noload, selectinload
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
@@ -16,6 +16,7 @@ from app.models import AIProcessingJob, AudioAsset, Lesson, LessonPage, LessonPa
 from app.providers.factory import get_storage_provider
 from app.schemas import (
     AudioOut,
+    CleanTextOut,
     EditTextRequest,
     GenerateAudioRequest,
     GenerateQuizRequest,
@@ -46,7 +47,11 @@ async def _get_owned_lesson(db: AsyncSession, user: User, lesson_id: str) -> Les
     lesson = await db.scalar(
         select(Lesson)
         .where(Lesson.id == lesson_id, Lesson.deleted_at.is_(None))
-        .options(selectinload(Lesson.pages))
+        .options(
+            selectinload(Lesson.pages),
+            noload(Lesson.sections),
+            noload(Lesson.audio_assets),
+        )
     )
     if not lesson:
         raise NotFoundError()
@@ -219,6 +224,22 @@ async def get_job(lesson_id: str, job_id: str, user: User = Depends(get_current_
         message=message_for_step(job.current_step),
         error_message=job.error_message,
     )
+
+
+@router.post("/{lesson_id}/clean-text", response_model=CleanTextOut)
+async def clean_lesson_text(
+    lesson_id: str,
+    body: EditTextRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await _get_owned_lesson(db, user, lesson_id)
+    except AppError as exc:
+        raise to_http_exception(exc) from exc
+    from app.utils.ocr_clean import clean_ocr_text
+
+    return CleanTextOut(cleaned_text=clean_ocr_text(body.edited_text))
 
 
 @router.patch("/{lesson_id}/text", response_model=LessonDetail)

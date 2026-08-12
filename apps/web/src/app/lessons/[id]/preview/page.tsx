@@ -159,6 +159,28 @@ export default function LessonPreviewPage() {
             {error ? <p className="text-sm text-rose-700">{error}</p> : null}
 
             <div className="flex flex-wrap gap-3 pt-2">
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={async () => {
+                  setSaving(true);
+                  setError("");
+                  try {
+                    const res = await api<{ cleaned_text: string }>(`/lessons/${id}/clean-text`, {
+                      method: "POST",
+                      body: JSON.stringify({ edited_text: text }),
+                    });
+                    setText(res.cleaned_text);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not clean the text.");
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                disabled={saving || !text.trim()}
+              >
+                Clean extra noise
+              </Button>
               <Button size="lg" onClick={continueToLearn} disabled={saving}>
                 {saving ? "Saving..." : "Looks good — Start learning"}
                 <ArrowRight className="h-4 w-4" />

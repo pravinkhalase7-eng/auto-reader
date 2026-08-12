@@ -218,8 +218,23 @@ EOF
               exit 1
             fi
           '''
-          echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
+            echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
         }
+      }
+    }
+
+    stage('Clean') {
+      steps {
+        sh '''
+          set +e
+          echo "=== Clean previous AI Teacher containers/images (keep postgres data) ==="
+          docker compose -f docker-compose.yml down --remove-orphans || true
+          docker rm -f aiteacher-api aiteacher-web 2>/dev/null || true
+          docker rmi -f aiteacher-api:latest aiteacher-web:latest 2>/dev/null || true
+          docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/^aiteacher-api:|^aiteacher-web:/{print $2}' | sort -u | xargs -r docker rmi -f
+          echo "=== Remaining aiteacher images ==="
+          docker images | grep aiteacher || echo "(none)"
+        '''
       }
     }
 
@@ -232,9 +247,8 @@ EOF
           . ./.env.deploy
           set +a
 
-          echo "Building API image..."
-          # IMPORTANT: do NOT bind-mount Jenkins workspace into docker run.
-          docker build -t ${API_IMAGE} -t ${API_IMAGE_LATEST} ./apps/api
+          echo "Building API image (no cache so lesson-save fix is actually in the image)..."
+          docker build --no-cache -t ${API_IMAGE} -t ${API_IMAGE_LATEST} ./apps/api
 
           echo "Building Web image (NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL})..."
           docker build \
@@ -299,11 +313,8 @@ EOF
           free_port "${API_HOST_PORT}"
           free_port "${WEB_HOST_PORT}"
 
-          if [ "${FORCE_RECREATE}" = "true" ]; then
-            docker compose -f docker-compose.yml up -d --build --force-recreate
-          else
-            docker compose -f docker-compose.yml up -d --build
-          fi
+          echo "Starting stack from the images just built (no compose rebuild)..."
+          docker compose -f docker-compose.yml up -d --no-build --force-recreate
 
           echo "Waiting for API healthy (via docker exec — works with Jenkins-in-Docker)..."
           for i in $(seq 1 45); do

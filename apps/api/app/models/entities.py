@@ -81,13 +81,13 @@ class Lesson(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="LessonSection.position",
-        lazy="selectin",
+        lazy="select",
     )
     audio_assets: Mapped[list["AudioAsset"]] = relationship(
         back_populates="lesson",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        lazy="selectin",
+        lazy="select",
     )
     quizzes: Mapped[list["Quiz"]] = relationship(
         back_populates="lesson", cascade="all, delete-orphan", lazy="selectin"

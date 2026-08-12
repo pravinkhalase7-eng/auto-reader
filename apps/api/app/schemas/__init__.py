@@ -145,6 +145,10 @@ class EditTextRequest(BaseModel):
     title: Optional[str] = None
 
 
+class CleanTextOut(BaseModel):
+    cleaned_text: str
+
+
 class GenerateAudioRequest(BaseModel):
     speed: str = "slow"
     voice: Optional[str] = None

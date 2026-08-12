@@ -340,6 +340,9 @@ class LessonProcessingService:
         *,
         title: str | None = None,
     ) -> None:
+        from app.utils.ocr_clean import clean_ocr_text
+
+        edited_text = clean_ocr_text(edited_text)
         structured = await self.ai.structure_content(edited_text, language_hint=lesson.language)
         tree = reconstruct_from_text(
             structured.cleaned_text,
