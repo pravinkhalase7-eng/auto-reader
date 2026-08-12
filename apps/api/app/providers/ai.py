@@ -20,6 +20,7 @@ from app.providers.base import (
     StructuredContent,
 )
 from app.utils.languages import detect_script_language
+from app.utils.ocr_clean import clean_ocr_text
 from app.utils.segmentation import split_sentences, tokenize_words
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ def _summary(text: str, language: str) -> str:
 class LocalAIProvider(AIProvider):
     async def structure_content(self, raw_text: str, language_hint: str | None = None) -> StructuredContent:
         language = language_hint or detect_script_language(raw_text)
-        cleaned = raw_text.strip()
+        cleaned = clean_ocr_text(raw_text)
         content_type = _classify_content(cleaned)
         return StructuredContent(
             title=_title_from_text(cleaned),

@@ -94,3 +94,66 @@ async def test_local_quiz_and_eval():
 
 def test_tokenize():
     assert tokenize_words("Hello, world!") == ["Hello,", "world!"]
+
+
+def test_ocr_clean_drops_noise_keeps_story():
+    from app.utils.ocr_clean import clean_ocr_text
+
+    raw = """The Lion and the Mouse
+
+    ||| ~~ ©
+    12
+
+    One day, a lion was sleeping in the forest.
+    • • •
+    """
+    cleaned = clean_ocr_text(raw)
+    assert "Lion" in cleaned
+    assert "sleeping" in cleaned
+    assert "|||" not in cleaned
+    assert "~~" not in cleaned
+    assert cleaned.splitlines()[-1].strip() != "12"
+
+
+def test_ocr_clean_keeps_devanagari():
+    from app.utils.ocr_clean import clean_ocr_text
+
+    text = "एक दिन जंगल में एक शेर सो रहा था।"
+    assert "शेर" in clean_ocr_text(text)
+
+
+def test_tesseract_data_filters_low_confidence():
+    from app.providers.ocr import _text_from_tesseract_data
+
+    data = {
+        "text": ["The", "lion", "@@@", "slept"],
+        "conf": ["90", "88", "12", "80"],
+        "block_num": [1, 1, 1, 1],
+        "par_num": [1, 1, 1, 1],
+        "line_num": [1, 1, 1, 1],
+    }
+    text, avg = _text_from_tesseract_data(data)
+    assert "lion" in text
+    assert "@@@" not in text
+    assert avg > 0.7
+
+
+def test_preprocess_bleaches_bright_chroma():
+    import io
+
+    from PIL import Image
+
+    from app.services.image_preprocess import ImagePreprocessService
+
+    img = Image.new("RGB", (1600, 400), (255, 255, 255))
+    img.paste((15, 15, 15), (50, 50, 150, 200))
+    img.paste((255, 230, 40), (900, 50, 1400, 350))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    processed, _, _ = ImagePreprocessService().process_bytes(buf.getvalue())
+    out = Image.open(io.BytesIO(processed))
+    assert out.mode == "L"
+    assert out.getpixel((90, 120)) < 60
+    assert out.getpixel((1150, 180)) > 200
+

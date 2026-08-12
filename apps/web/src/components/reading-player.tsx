@@ -13,7 +13,13 @@ import { Button } from "@/components/ui/button";
 import { useReaderStore } from "@/store/reader-store";
 import type { AudioAsset, LessonContent, PlaybackStyle, SpeedOption } from "@/types";
 import { cn } from "@/lib/utils";
-import { buildUtterance, SPEED_RATE, waitForVoices } from "@/lib/speech";
+import {
+  buildUtterance,
+  cancelSpeech,
+  SPEED_RATE,
+  voicesForLanguage,
+  waitForVoices,
+} from "@/lib/speech";
 
 type FlatWord = {
   id: string;
@@ -31,15 +37,25 @@ type FlatSentence = {
   globalStart: number;
 };
 
+type FlatParagraph = {
+  id: string;
+  startWord: number;
+  startSentence: number;
+  text: string;
+  ranges: { start: number; end: number; globalWord: number }[];
+};
+
 function flattenContent(content: LessonContent) {
   const words: FlatWord[] = [];
   const sentences: FlatSentence[] = [];
-  const paragraphs: { id: string; startWord: number; startSentence: number }[] = [];
+  const paragraphs: FlatParagraph[] = [];
 
   for (const section of content.sections) {
     for (const para of section.paragraphs) {
       const startWord = words.length;
       const startSentence = sentences.length;
+      let paraText = "";
+      const paraRanges: FlatParagraph["ranges"] = [];
 
       for (const sent of para.sentences) {
         const sentWords: FlatWord[] = [];
@@ -60,6 +76,15 @@ function flattenContent(content: LessonContent) {
           sentWords.push(flat);
           words.push(flat);
           ranges.push({ start, end: text.length, wordOffset });
+
+          if (paraText.length > 0) paraText += " ";
+          const pStart = paraText.length;
+          paraText += w.text;
+          paraRanges.push({
+            start: pStart,
+            end: paraText.length,
+            globalWord: globalStart + wordOffset,
+          });
         });
 
         if (sentWords.length) {
@@ -74,22 +99,28 @@ function flattenContent(content: LessonContent) {
         }
       }
 
-      paragraphs.push({ id: para.id, startWord, startSentence });
+      paragraphs.push({
+        id: para.id,
+        startWord,
+        startSentence,
+        text: paraText,
+        ranges: paraRanges,
+      });
     }
   }
 
   return { words, sentences, paragraphs };
 }
 
-function wordOffsetAtChar(
-  ranges: FlatSentence["ranges"],
+function globalWordAtChar(
+  ranges: FlatParagraph["ranges"],
   charIndex: number,
 ): number {
   if (!ranges.length) return 0;
-  let match = 0;
+  let match = ranges[0].globalWord;
   for (const r of ranges) {
-    if (charIndex >= r.start) match = r.wordOffset;
-    if (charIndex >= r.start && charIndex < r.end) return r.wordOffset;
+    if (charIndex >= r.start) match = r.globalWord;
+    if (charIndex >= r.start && charIndex < r.end) return r.globalWord;
   }
   return match;
 }
@@ -109,6 +140,7 @@ export function ReadingPlayer({
     speed,
     playbackStyle,
     volume,
+    preferredVoiceURI,
     isPlaying,
     paragraphIndex,
     activeWordId,
@@ -117,6 +149,7 @@ export function ReadingPlayer({
     setSpeed,
     setPlaybackStyle,
     setVolume,
+    setPreferredVoiceURI,
     setParagraphIndex,
     setMode,
     reset,
@@ -129,6 +162,7 @@ export function ReadingPlayer({
 
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
   const [voicesReady, setVoicesReady] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const cancelledRef = useRef(false);
   const pausedRef = useRef(false);
@@ -138,8 +172,11 @@ export function ReadingPlayer({
   const estimateTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    waitForVoices().then(() => setVoicesReady(true));
-  }, []);
+    waitForVoices().then((voices) => {
+      setAvailableVoices(voicesForLanguage(content.language, voices));
+      setVoicesReady(true);
+    });
+  }, [content.language]);
 
   const clearEstimate = () => {
     if (estimateTimerRef.current) {
@@ -172,6 +209,7 @@ export function ReadingPlayer({
           speed,
           volume,
           voices,
+          preferredVoiceURI,
         });
         if (warning) setVoiceWarning(warning);
         utterance.onboundary = (event) => {
@@ -182,40 +220,37 @@ export function ReadingPlayer({
         utterance.onerror = () => resolve("error");
         window.speechSynthesis.speak(utterance);
       }),
-    [content.language, speed, volume],
+    [content.language, preferredVoiceURI, speed, volume],
   );
 
-  /** Fluent playback: whole sentence, highlight via charIndex (or timed estimate). */
-  const speakSentenceNatural = useCallback(
-    async (sentence: FlatSentence, voices: SpeechSynthesisVoice[], runId: number) => {
-      activateGlobal(sentence.globalStart);
+  /** Fluent playback: whole paragraph so intonation stays natural. */
+  const speakParagraphNatural = useCallback(
+    async (paragraph: FlatParagraph, voices: SpeechSynthesisVoice[], runId: number) => {
+      if (!paragraph.ranges.length) return;
+      activateGlobal(paragraph.startWord);
       let boundaryHits = 0;
 
-      const msPerWord = Math.max(
-        160,
-        Math.round(280 / SPEED_RATE[speed]),
-      );
+      const msPerWord = Math.max(180, Math.round(300 / SPEED_RATE[speed]));
 
-      // Soft estimate only until real boundaries arrive
       let est = 0;
       clearEstimate();
       estimateTimerRef.current = window.setInterval(() => {
         if (pausedRef.current || cancelledRef.current || runIdRef.current !== runId) return;
         if (boundaryHits > 0) return;
-        if (est < sentence.words.length) {
-          activateGlobal(sentence.globalStart + est);
+        const wordCount = paragraph.ranges.length;
+        if (est < wordCount) {
+          activateGlobal(paragraph.startWord + est);
           est += 1;
         }
       }, msPerWord);
 
-      await speakUtterance(sentence.text, voices, (charIndex) => {
+      await speakUtterance(paragraph.text, voices, (charIndex) => {
         boundaryHits += 1;
-        const offset = wordOffsetAtChar(sentence.ranges, charIndex);
-        activateGlobal(sentence.globalStart + offset);
+        activateGlobal(globalWordAtChar(paragraph.ranges, charIndex));
       });
 
       clearEstimate();
-      activateGlobal(sentence.globalStart + sentence.words.length - 1);
+      activateGlobal(paragraph.startWord + paragraph.ranges.length - 1);
     },
     [activateGlobal, speakUtterance, speed],
   );
@@ -255,29 +290,49 @@ export function ReadingPlayer({
       cancelledRef.current = false;
       pausedRef.current = false;
       setPlaying(true);
-      window.speechSynthesis.cancel();
+      cancelSpeech();
       clearEstimate();
       await sleep(30);
 
       const voices = await waitForVoices();
       const style: PlaybackStyle = playbackStyle;
 
-      for (let i = startSentence; i < sentences.length; i++) {
-        if (cancelledRef.current || runIdRef.current !== runId) break;
-        while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
-          await sleep(80);
+      if (style === "natural") {
+        const startPara = paragraphs.findIndex((_, idx) => {
+          const nextStart = paragraphs[idx + 1]?.startSentence ?? sentences.length;
+          return startSentence >= paragraphs[idx].startSentence && startSentence < nextStart;
+        });
+        const from = Math.max(0, startPara);
+
+        for (let i = from; i < paragraphs.length; i++) {
+          if (cancelledRef.current || runIdRef.current !== runId) break;
+          while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
+            await sleep(80);
+          }
+          if (cancelledRef.current || runIdRef.current !== runId) break;
+
+          const paragraph = paragraphs[i];
+          sentenceCursorRef.current = paragraph.startSentence;
+          setParagraphIndex(i);
+          await speakParagraphNatural(paragraph, voices, runId);
+          if (!cancelledRef.current && runIdRef.current === runId) {
+            await sleep(220);
+          }
         }
-        if (cancelledRef.current || runIdRef.current !== runId) break;
+      } else {
+        for (let i = startSentence; i < sentences.length; i++) {
+          if (cancelledRef.current || runIdRef.current !== runId) break;
+          while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
+            await sleep(80);
+          }
+          if (cancelledRef.current || runIdRef.current !== runId) break;
 
-        sentenceCursorRef.current = i;
-        const sentence = sentences[i];
-        const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
-        if (pIdx >= 0) setParagraphIndex(pIdx);
+          sentenceCursorRef.current = i;
+          const sentence = sentences[i];
+          const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
+          if (pIdx >= 0) setParagraphIndex(pIdx);
 
-        if (style === "word") {
           await speakSentenceWordByWord(sentence, voices, runId);
-        } else {
-          await speakSentenceNatural(sentence, voices, runId);
         }
       }
 
@@ -290,7 +345,7 @@ export function ReadingPlayer({
       sentences,
       setParagraphIndex,
       setPlaying,
-      speakSentenceNatural,
+      speakParagraphNatural,
       speakSentenceWordByWord,
     ],
   );
@@ -300,7 +355,7 @@ export function ReadingPlayer({
     pausedRef.current = false;
     runIdRef.current += 1;
     clearEstimate();
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
     setPlaying(false);
   }, [setPlaying]);
 
@@ -311,7 +366,7 @@ export function ReadingPlayer({
   const pause = () => {
     pausedRef.current = true;
     clearEstimate();
-    window.speechSynthesis?.cancel();
+    cancelSpeech();
     setPlaying(false);
   };
 
@@ -367,7 +422,7 @@ export function ReadingPlayer({
             playbackStyle === "natural" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
           )}
         >
-          Normal play
+          Natural reading
         </button>
         <button
           type="button"
@@ -467,6 +522,25 @@ export function ReadingPlayer({
           />
         </label>
       </div>
+
+      {availableVoices.length > 0 ? (
+        <label className="mt-3 flex flex-col gap-1 text-sm text-teal-900">
+          Voice
+          <select
+            className="rounded-xl border border-teal-900/15 bg-white px-2 py-1.5"
+            value={preferredVoiceURI ?? availableVoices[0]?.voiceURI ?? ""}
+            onChange={(e) => setPreferredVoiceURI(e.target.value || null)}
+            aria-label="Narrator voice"
+          >
+            {availableVoices.map((v) => (
+              <option key={v.voiceURI} value={v.voiceURI}>
+                {v.name}
+                {!v.localService ? " (natural)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
     </div>
   );
 }

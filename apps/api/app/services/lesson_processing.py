@@ -138,7 +138,7 @@ class LessonProcessingService:
             page_texts: list[str] = []
             for page in sorted(lesson.pages, key=lambda p: p.page_number):
                 original = await self.storage.open_path(page.original_storage_key)
-                processed_key = f"processed/{lesson.id}/page_{page.page_number}.jpg"
+                processed_key = f"processed/{lesson.id}/page_{page.page_number}.png"
                 processed_path = await self.storage.open_path(processed_key)
                 w, h = self.preprocess.process_file(original, processed_path)
                 page.processed_storage_key = processed_key

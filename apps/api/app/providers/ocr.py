@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.config import get_settings
 from app.core.exceptions import AppError, FRIENDLY_MESSAGES
 from app.providers.base import OCRProvider, OCRResult
+from app.utils.ocr_clean import clean_ocr_text
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,39 @@ def _tess_lang_string(language_hint: str | None = None) -> str:
     return "+".join(seen)
 
 
+def _text_from_tesseract_data(data: dict, min_conf: int = 40) -> tuple[str, float]:
+    """Rebuild text from confident words only, preserving line breaks."""
+    n = len(data.get("text") or [])
+    lines: list[str] = []
+    current: list[str] = []
+    last_key: tuple[int, int, int] | None = None
+    confs: list[int] = []
+
+    for i in range(n):
+        raw = (data["text"][i] or "").strip()
+        try:
+            conf = int(float(data["conf"][i]))
+        except (TypeError, ValueError):
+            conf = -1
+        if not raw or conf < min_conf:
+            continue
+        key = (int(data["block_num"][i]), int(data["par_num"][i]), int(data["line_num"][i]))
+        if last_key is not None and key != last_key:
+            if current:
+                lines.append(" ".join(current))
+            current = []
+        current.append(raw)
+        confs.append(conf)
+        last_key = key
+
+    if current:
+        lines.append(" ".join(current))
+
+    text = "\n".join(lines)
+    avg = (sum(confs) / len(confs) / 100.0) if confs else 0.0
+    return text, avg
+
+
 class LocalOCRProvider(OCRProvider):
     """Extract text from uploaded images via Tesseract. Never invents demo stories."""
 
@@ -122,22 +156,28 @@ class LocalOCRProvider(OCRProvider):
         try:
             lang = _tess_lang_string(language_hint)
             image = Image.open(image_path)
-            # Preserve layout better than default single block
-            config = "--psm 6"
-            text = pytesseract.image_to_string(image, lang=lang, config=config)
-            cleaned = text.replace("\x0c", "").strip()
+            config = "--oem 3 --psm 4 -c preserve_interword_spaces=1"
+            data = pytesseract.image_to_data(
+                image,
+                lang=lang,
+                config=config,
+                output_type=pytesseract.Output.DICT,
+            )
+            text, avg_conf = _text_from_tesseract_data(data)
+            cleaned = clean_ocr_text(text)
             logger.info(
-                "ocr_complete path=%s lang=%s chars=%s",
+                "ocr_complete path=%s lang=%s chars=%s conf=%.2f",
                 image_path.name,
                 lang,
                 len(cleaned),
+                avg_conf,
             )
             if not cleaned:
                 raise AppError(FRIENDLY_MESSAGES["EMPTY_CONTENT"], code="EMPTY_CONTENT")
             return OCRResult(
                 text=cleaned,
-                confidence=0.75,
-                meta={"engine": "tesseract", "lang": lang},
+                confidence=max(avg_conf, 0.5),
+                meta={"engine": "tesseract", "lang": lang, "avg_conf": round(avg_conf, 3)},
             )
         except AppError:
             raise
@@ -168,8 +208,10 @@ class OpenAIOCRProvider(OCRProvider):
                         {
                             "type": "text",
                             "text": (
-                                "Extract ALL educational text from this textbook/worksheet page image exactly. "
-                                "Preserve headings, paragraphs, poetry line breaks, and lists. "
+                                "Extract ONLY the printed educational text from this textbook/worksheet page. "
+                                "Copy wording exactly. Preserve headings, paragraphs, poetry line breaks, and lists. "
+                                "Ignore illustrations, photos, decorative borders, color bars, watermarks, "
+                                "headers/footers, page numbers, and chromatic/color noise. "
                                 "Do not invent or replace the story. Return plain text only in the same language."
                             ),
                         },
@@ -187,7 +229,7 @@ class OpenAIOCRProvider(OCRProvider):
                 )
                 resp.raise_for_status()
                 text = resp.json()["choices"][0]["message"]["content"]
-            cleaned = (text or "").strip()
+            cleaned = clean_ocr_text(text or "")
             if not cleaned:
                 raise AppError(FRIENDLY_MESSAGES["EMPTY_CONTENT"], code="EMPTY_CONTENT")
             return OCRResult(text=cleaned, confidence=0.9, meta={"engine": "openai"})

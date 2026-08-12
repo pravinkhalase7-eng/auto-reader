@@ -8,6 +8,7 @@ type ReaderState = {
   speed: SpeedOption;
   playbackStyle: PlaybackStyle;
   volume: number;
+  preferredVoiceURI: string | null;
   isPlaying: boolean;
   activeWordId: string | null;
   activeParagraphId: string | null;
@@ -17,6 +18,7 @@ type ReaderState = {
   setSpeed: (speed: SpeedOption) => void;
   setPlaybackStyle: (style: PlaybackStyle) => void;
   setVolume: (volume: number) => void;
+  setPreferredVoiceURI: (uri: string | null) => void;
   setPlaying: (playing: boolean) => void;
   setActive: (wordId: string | null, sentenceId?: string | null, paragraphId?: string | null) => void;
   setParagraphIndex: (index: number) => void;
@@ -28,6 +30,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
   speed: "normal",
   playbackStyle: "natural",
   volume: 1,
+  preferredVoiceURI: null,
   isPlaying: false,
   activeWordId: null,
   activeParagraphId: null,
@@ -37,6 +40,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
   setSpeed: (speed) => set({ speed }),
   setPlaybackStyle: (playbackStyle) => set({ playbackStyle }),
   setVolume: (volume) => set({ volume }),
+  setPreferredVoiceURI: (preferredVoiceURI) => set({ preferredVoiceURI }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setActive: (activeWordId, activeSentenceId = null, activeParagraphId = null) =>
     set({ activeWordId, activeSentenceId, activeParagraphId }),
