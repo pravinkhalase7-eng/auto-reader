@@ -36,7 +36,9 @@ END $$;
 
 async def apply_schema_patches(bind) -> None:
     """Existing Postgres DBs were created without ON DELETE CASCADE on timings."""
-    if not str(settings.database_url).startswith("postgresql"):
+    dialect = getattr(getattr(bind, "dialect", None), "name", "") or ""
+    url = str(settings.database_url)
+    if dialect != "postgresql" and not url.startswith("postgresql"):
         return
     await bind.execute(text(_TTS_WORD_FK_PATCH))
 

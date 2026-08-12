@@ -123,7 +123,11 @@ class LessonProcessingService:
             text("DELETE FROM lesson_sections WHERE lesson_id = :lesson_id"),
             params,
         )
-        await self.db.flush()
+        logger.info("wipe_lesson_tree sql_ok lesson_id=%s", lesson_id)
+
+    async def persist_content_tree(self, lesson: Lesson, tree: ContentTree) -> None:
+        # Detach loaded words/timings FIRST. A later flush must not ORM-delete them
+        # while tts_word_timings still points at lesson_words.
         self._expunge_content_rows(
             TTSWordTiming,
             AudioAsset,
@@ -132,9 +136,10 @@ class LessonProcessingService:
             LessonParagraph,
             LessonSection,
         )
-
-    async def persist_content_tree(self, lesson: Lesson, tree: ContentTree) -> None:
+        self.db.expire(lesson, ["sections", "audio_assets"])
+        logger.info("wipe_lesson_tree start lesson_id=%s", lesson.id)
         await self._wipe_lesson_tree(lesson.id)
+        logger.info("wipe_lesson_tree done lesson_id=%s", lesson.id)
 
         lesson.title = tree.title
         lesson.language = tree.language
@@ -271,7 +276,6 @@ class LessonProcessingService:
             params,
         )
         await self.db.execute(text("DELETE FROM audio_assets WHERE lesson_id = :lesson_id"), params)
-        await self.db.flush()
         self._expunge_content_rows(TTSWordTiming, AudioAsset)
         # Query words directly to avoid stale identity-map collections
         sections = list(

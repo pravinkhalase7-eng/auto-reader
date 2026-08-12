@@ -79,11 +79,15 @@ class Lesson(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     sections: Mapped[list["LessonSection"]] = relationship(
         back_populates="lesson",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="LessonSection.position",
         lazy="selectin",
     )
     audio_assets: Mapped[list["AudioAsset"]] = relationship(
-        back_populates="lesson", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="lesson",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
     )
     quizzes: Mapped[list["Quiz"]] = relationship(
         back_populates="lesson", cascade="all, delete-orphan", lazy="selectin"
@@ -118,6 +122,7 @@ class LessonSection(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     paragraphs: Mapped[list["LessonParagraph"]] = relationship(
         back_populates="section",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="LessonParagraph.position",
         lazy="selectin",
     )
@@ -126,7 +131,7 @@ class LessonSection(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class LessonParagraph(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "lesson_paragraphs"
 
-    section_id: Mapped[str] = mapped_column(ForeignKey("lesson_sections.id"), index=True)
+    section_id: Mapped[str] = mapped_column(ForeignKey("lesson_sections.id", ondelete="CASCADE"), index=True)
     text: Mapped[str] = mapped_column(Text)
     position: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -134,6 +139,7 @@ class LessonParagraph(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     sentences: Mapped[list["LessonSentence"]] = relationship(
         back_populates="paragraph",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="LessonSentence.position",
         lazy="selectin",
     )
@@ -142,7 +148,7 @@ class LessonParagraph(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class LessonSentence(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "lesson_sentences"
 
-    paragraph_id: Mapped[str] = mapped_column(ForeignKey("lesson_paragraphs.id"), index=True)
+    paragraph_id: Mapped[str] = mapped_column(ForeignKey("lesson_paragraphs.id", ondelete="CASCADE"), index=True)
     text: Mapped[str] = mapped_column(Text)
     position: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -150,6 +156,7 @@ class LessonSentence(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     words: Mapped[list["LessonWord"]] = relationship(
         back_populates="sentence",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="LessonWord.position",
         lazy="selectin",
     )
@@ -158,7 +165,7 @@ class LessonSentence(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class LessonWord(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "lesson_words"
 
-    sentence_id: Mapped[str] = mapped_column(ForeignKey("lesson_sentences.id"), index=True)
+    sentence_id: Mapped[str] = mapped_column(ForeignKey("lesson_sentences.id", ondelete="CASCADE"), index=True)
     text: Mapped[str] = mapped_column(String(256))
     index: Mapped[int] = mapped_column(Integer, default=0)
     position: Mapped[int] = mapped_column(Integer, default=0)
