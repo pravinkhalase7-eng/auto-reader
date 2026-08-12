@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -51,7 +51,29 @@ class LessonProcessingService:
             job.finished_at = datetime.now(timezone.utc)
         await self.db.commit()
 
+    async def _clear_lesson_audio(self, lesson_id: str) -> None:
+        """Remove audio + timings before words are replaced (FK: tts_word_timings.word_id)."""
+        assets = list(
+            await self.db.scalars(
+                select(AudioAsset)
+                .where(AudioAsset.lesson_id == lesson_id)
+                .options(selectinload(AudioAsset.timings))
+            )
+        )
+        for asset in assets:
+            await self.db.delete(asset)
+        word_ids = (
+            select(LessonWord.id)
+            .join(LessonSentence, LessonWord.sentence_id == LessonSentence.id)
+            .join(LessonParagraph, LessonSentence.paragraph_id == LessonParagraph.id)
+            .join(LessonSection, LessonParagraph.section_id == LessonSection.id)
+            .where(LessonSection.lesson_id == lesson_id)
+        )
+        await self.db.execute(delete(TTSWordTiming).where(TTSWordTiming.word_id.in_(word_ids)))
+        await self.db.flush()
+
     async def persist_content_tree(self, lesson: Lesson, tree: ContentTree) -> None:
+        await self._clear_lesson_audio(lesson.id)
         # Clear existing structure (async-safe eager load + ORM delete for cascades)
         loaded = await self.db.scalar(
             select(Lesson)
@@ -191,6 +213,7 @@ class LessonProcessingService:
             _ = exc
 
     async def ensure_audio(self, lesson: Lesson, speed: str = "slow") -> AudioAsset:
+        await self._clear_lesson_audio(lesson.id)
         # Query words directly to avoid stale identity-map collections
         sections = list(
             await self.db.scalars(

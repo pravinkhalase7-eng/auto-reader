@@ -186,8 +186,12 @@ class AudioAsset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class TTSWordTiming(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "tts_word_timings"
 
-    audio_asset_id: Mapped[str] = mapped_column(ForeignKey("audio_assets.id"), index=True)
-    word_id: Mapped[str] = mapped_column(ForeignKey("lesson_words.id"), index=True)
+    audio_asset_id: Mapped[str] = mapped_column(
+        ForeignKey("audio_assets.id", ondelete="CASCADE"), index=True
+    )
+    word_id: Mapped[str] = mapped_column(
+        ForeignKey("lesson_words.id", ondelete="CASCADE"), index=True
+    )
     start_ms: Mapped[int] = mapped_column(Integer)
     end_ms: Mapped[int] = mapped_column(Integer)
 

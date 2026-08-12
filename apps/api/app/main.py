@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import api_router
 from app.core.base import Base
 from app.core.config import get_settings
-from app.core.database import AsyncSessionLocal, engine
+from app.core.database import AsyncSessionLocal, apply_schema_patches, engine
 from app.core.exceptions import AppError
 from app.core.logging import request_id_ctx, setup_logging
 from app.core.security import TokenError
@@ -22,6 +22,7 @@ setup_logging()
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await apply_schema_patches(conn)
     if settings.seed_on_startup:
         async with AsyncSessionLocal() as session:
             from app.services.seed import seed_demo_lessons

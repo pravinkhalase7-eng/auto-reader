@@ -157,3 +157,68 @@ def test_preprocess_bleaches_bright_chroma():
     assert out.getpixel((90, 120)) < 60
     assert out.getpixel((1150, 180)) > 200
 
+
+@pytest.mark.asyncio
+async def test_persist_content_tree_replaces_words_with_timings(tmp_path):
+    """Editing a lesson must drop TTS timings before replacing words (Postgres FK)."""
+    from sqlalchemy import event
+    from sqlalchemy.pool import StaticPool
+
+    from app.models import Lesson, User
+    from app.services.lesson_processing import LessonProcessingService
+    from app.utils.segmentation import reconstruct_from_text
+
+    db_path = tmp_path / "fk.db"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_fk(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as session:
+        user = User(
+            email="editor@example.com",
+            hashed_password="x",
+            full_name="Editor",
+        )
+        session.add(user)
+        await session.flush()
+        lesson = Lesson(user_id=user.id, title="Story", status="ready")
+        session.add(lesson)
+        await session.flush()
+
+        svc = LessonProcessingService(session)
+        tree1 = reconstruct_from_text(
+            "The lion slept.\n\nThe mouse ran.",
+            title="Story",
+            language="en",
+            content_type="story",
+        )
+        await svc.persist_content_tree(lesson, tree1)
+        await svc.ensure_audio(lesson, speed="slow")
+
+        tree2 = reconstruct_from_text(
+            "The lion woke up.\n\nThe mouse helped him.",
+            title="Story",
+            language="en",
+            content_type="story",
+        )
+        await svc.persist_content_tree(lesson, tree2)
+        await svc.ensure_audio(lesson, speed="slow")
+        await session.commit()
+
+        assert "woke" in (lesson.edited_text or "")
+
+    await engine.dispose()
+
+
