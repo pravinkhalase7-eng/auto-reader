@@ -27,7 +27,17 @@ pipeline {
     string(
       name: 'PUBLIC_API_URL',
       defaultValue: '',
-      description: 'Optional override for NEXT_PUBLIC_API_URL (e.g. http://YOUR_VPS_IP:8000/api/v1). If empty, uses value from aiteacher-env-file.'
+      description: 'Optional override for NEXT_PUBLIC_API_URL (e.g. http://YOUR_VPS_IP:8000/api/v1). If empty, uses value from env file.'
+    )
+    string(
+      name: 'ENV_CREDENTIAL_ID',
+      defaultValue: 'aiteacher-env-file',
+      description: 'Jenkins Secret file credential ID. Leave default, or set the ID you actually created.'
+    )
+    booleanParam(
+      name: 'USE_REPO_ENV_EXAMPLE',
+      defaultValue: true,
+      description: 'If credential is missing, fall back to aiteacher.env.example from the repo (OK for first deploy; change secrets later).'
     )
   }
 
@@ -75,28 +85,33 @@ pipeline {
       steps {
         script {
           def usedEnv = false
+          def credId = (params.ENV_CREDENTIAL_ID ?: 'aiteacher-env-file').trim()
 
-          // 1) Jenkins Secret file — ID must be exactly: aiteacher-env-file
+          // 1) Jenkins Secret file (ID configurable via ENV_CREDENTIAL_ID)
           try {
-            withCredentials([file(credentialsId: 'aiteacher-env-file', variable: 'ENV_FILE')]) {
+            withCredentials([file(credentialsId: credId, variable: 'ENV_FILE')]) {
               sh '''
                 echo "Secret file path bound: $ENV_FILE"
                 test -f "$ENV_FILE" || { echo "ERROR: credential file path missing"; exit 1; }
                 cp -f "$ENV_FILE" .env.deploy
-                echo "Copied aiteacher-env-file → .env.deploy"
+                echo "Copied credential file → .env.deploy"
               '''
               usedEnv = true
+              echo "Loaded Jenkins credential ID: ${credId}"
             }
           } catch (err) {
-            echo "Could not load credential aiteacher-env-file: ${err}"
-            echo "Check: Manage Jenkins → Credentials → ID is exactly aiteacher-env-file (Secret file), scope Global."
+            echo "WARN: Could not load credential '${credId}': ${err}"
+            echo "Tip: Manage Jenkins → Credentials → Add → Kind=Secret file, ID=${credId}"
+            echo "Or set build param ENV_CREDENTIAL_ID to an existing Secret file ID."
+            echo "Or enable USE_REPO_ENV_EXAMPLE to use aiteacher.env.example from git."
           }
 
-          // 2) Fallback: persistent / workspace files
+          // 2) Fallback: persistent / workspace / repo example files
           if (!usedEnv) {
             sh '''
               echo "=== Looking for fallback env files ==="
-              ls -la aiteacher.env .env /var/jenkins_home/aiteacher.env /var/jenkins_home/secrets/aiteacher.env 2>/dev/null || true
+              ls -la aiteacher.env.example aiteacher.env .env \
+                /var/jenkins_home/aiteacher.env /var/jenkins_home/secrets/aiteacher.env 2>/dev/null || true
             '''
             def candidates = [
               '/var/jenkins_home/secrets/aiteacher.env',
@@ -104,53 +119,72 @@ pipeline {
               'aiteacher.env',
               '.env',
             ]
+            if (params.USE_REPO_ENV_EXAMPLE) {
+              candidates.add('aiteacher.env.example')
+            }
             for (p in candidates) {
               if (fileExists(p)) {
                 sh "cp -f '${p}' .env.deploy"
                 usedEnv = true
                 echo "Using env file: ${p} → .env.deploy"
+                if (p == 'aiteacher.env.example') {
+                  echo "WARNING: using repo example env. Replace YOUR_VPS_IP via PUBLIC_API_URL param, and add a real Secret file later."
+                }
                 break
               }
             }
           }
 
           if (!usedEnv) {
-            // Allow build/smoke without secrets when SKIP_DEPLOY — still create a minimal file
-            if (params.SKIP_DEPLOY) {
-              sh '''
-                cat > .env.deploy <<'EOF'
-SECRET_KEY=jenkins-build-only
+            // Last resort: generate a working default so first VPS deploy is not blocked
+            sh '''
+              cat > .env.deploy <<'EOF'
+API_HOST_PORT=8000
+WEB_HOST_PORT=3000
+POSTGRES_USER=aiteacher
+POSTGRES_PASSWORD=aiteacher
+POSTGRES_DB=aiteacher
 DATABASE_URL=postgresql+asyncpg://aiteacher:aiteacher@postgres:5432/aiteacher
+SECRET_KEY=jenkins-auto-generated-change-me
 CORS_ORIGINS=http://localhost:3000
 NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 AI_PROVIDER=local
 OCR_PROVIDER=local
 TTS_PROVIDER=browser
+STORAGE_PROVIDER=local
 SEED_ON_STARTUP=true
+OPENAI_API_KEY=
+GOOGLE_AI_API_KEY=
 EOF
-              '''
-              usedEnv = true
-              echo "SKIP_DEPLOY: wrote minimal .env.deploy for image build"
-            } else {
-              error('''No env source found.
-Create Jenkins credential:
-  Kind: Secret file
-  ID: aiteacher-env-file
-  Scope: Global
-Then rebuild.''')
-            }
+            '''
+            usedEnv = true
+            echo "WARN: wrote built-in default .env.deploy (no credential / example found). Set PUBLIC_API_URL to your VPS IP:8000/api/v1"
           }
 
           // Optional parameter override for public API URL (browser-facing)
           if (params.PUBLIC_API_URL?.trim()) {
             def url = params.PUBLIC_API_URL.trim()
+            // Derive UI origin for CORS when API looks like http://host:8000/api/v1
+            def cors = ''
+            def m = (url =~ /^(https?:\/\/[^:/]+)(?::8000)?(?:\/.*)?$/)
+            if (m.find()) {
+              cors = "${m.group(1)}:3000"
+            }
             sh """
               if grep -q '^NEXT_PUBLIC_API_URL=' .env.deploy; then
                 sed -i.bak 's|^NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${url}|' .env.deploy
               else
                 echo 'NEXT_PUBLIC_API_URL=${url}' >> .env.deploy
               fi
-              echo "PUBLIC_API_URL override applied"
+              if [ -n '${cors}' ]; then
+                if grep -q '^CORS_ORIGINS=' .env.deploy; then
+                  sed -i.bak 's|^CORS_ORIGINS=.*|CORS_ORIGINS=${cors}|' .env.deploy
+                else
+                  echo 'CORS_ORIGINS=${cors}' >> .env.deploy
+                fi
+                echo "CORS_ORIGINS set to ${cors}"
+              fi
+              echo "PUBLIC_API_URL override applied: ${url}"
             """
           }
 
