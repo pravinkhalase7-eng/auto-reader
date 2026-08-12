@@ -26,18 +26,23 @@ pipeline {
     )
     string(
       name: 'PUBLIC_API_URL',
-      defaultValue: '',
-      description: 'Optional override for NEXT_PUBLIC_API_URL (e.g. http://YOUR_VPS_IP:8000/api/v1). If empty, uses value from env file.'
+      defaultValue: 'http://187.127.138.86:8000/api/v1',
+      description: 'Browser-facing API URL baked into the web image'
     )
     string(
       name: 'ENV_CREDENTIAL_ID',
       defaultValue: 'aiteacher-env-file',
-      description: 'Jenkins Secret file credential ID. Leave default, or set the ID you actually created.'
+      description: 'Jenkins Secret file credential ID (only used when USE_ENV_CREDENTIAL=true)'
+    )
+    booleanParam(
+      name: 'USE_ENV_CREDENTIAL',
+      defaultValue: false,
+      description: 'OFF by default. Turn ON only after you create the Jenkins Secret file credential.'
     )
     booleanParam(
       name: 'USE_REPO_ENV_EXAMPLE',
       defaultValue: true,
-      description: 'If credential is missing, fall back to aiteacher.env.example from the repo (OK for first deploy; change secrets later).'
+      description: 'Use aiteacher.env.example from the repo when no credential is loaded'
     )
   }
 
@@ -87,8 +92,8 @@ pipeline {
           def usedEnv = false
           def credId = (params.ENV_CREDENTIAL_ID ?: 'aiteacher-env-file').trim()
 
-          // 1) Jenkins Secret file (ID configurable via ENV_CREDENTIAL_ID)
-          try {
+          // Credential lookup is OPTIONAL (default OFF) so missing secrets do not spam WARN/fail
+          if (params.USE_ENV_CREDENTIAL) {
             withCredentials([file(credentialsId: credId, variable: 'ENV_FILE')]) {
               sh '''
                 echo "Secret file path bound: $ENV_FILE"
@@ -99,44 +104,37 @@ pipeline {
               usedEnv = true
               echo "Loaded Jenkins credential ID: ${credId}"
             }
-          } catch (err) {
-            echo "WARN: Could not load credential '${credId}': ${err}"
-            echo "Tip: Manage Jenkins → Credentials → Add → Kind=Secret file, ID=${credId}"
-            echo "Or set build param ENV_CREDENTIAL_ID to an existing Secret file ID."
-            echo "Or enable USE_REPO_ENV_EXAMPLE to use aiteacher.env.example from git."
+          } else {
+            echo "USE_ENV_CREDENTIAL=false — skipping Jenkins secret lookup (this is OK)."
           }
 
-          // 2) Fallback: persistent / workspace / repo example files
           if (!usedEnv) {
             sh '''
-              echo "=== Looking for fallback env files ==="
+              echo "=== Looking for env files ==="
               ls -la aiteacher.env.example aiteacher.env .env \
                 /var/jenkins_home/aiteacher.env /var/jenkins_home/secrets/aiteacher.env 2>/dev/null || true
             '''
-            def candidates = [
-              '/var/jenkins_home/secrets/aiteacher.env',
-              '/var/jenkins_home/aiteacher.env',
-              'aiteacher.env',
-              '.env',
-            ]
+            def candidates = []
             if (params.USE_REPO_ENV_EXAMPLE) {
               candidates.add('aiteacher.env.example')
             }
+            candidates.addAll([
+              'aiteacher.env',
+              '.env',
+              '/var/jenkins_home/secrets/aiteacher.env',
+              '/var/jenkins_home/aiteacher.env',
+            ])
             for (p in candidates) {
               if (fileExists(p)) {
                 sh "cp -f '${p}' .env.deploy"
                 usedEnv = true
                 echo "Using env file: ${p} → .env.deploy"
-                if (p == 'aiteacher.env.example') {
-                  echo "WARNING: using repo example env. Replace YOUR_VPS_IP via PUBLIC_API_URL param, and add a real Secret file later."
-                }
                 break
               }
             }
           }
 
           if (!usedEnv) {
-            // Last resort: generate a working default so first VPS deploy is not blocked
             sh '''
               cat > .env.deploy <<'EOF'
 API_HOST_PORT=8000
@@ -146,8 +144,8 @@ POSTGRES_PASSWORD=aiteacher
 POSTGRES_DB=aiteacher
 DATABASE_URL=postgresql+asyncpg://aiteacher:aiteacher@postgres:5432/aiteacher
 SECRET_KEY=jenkins-auto-generated-change-me
-CORS_ORIGINS=http://localhost:3000
-NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+CORS_ORIGINS=http://187.127.138.86:3000
+NEXT_PUBLIC_API_URL=http://187.127.138.86:8000/api/v1
 AI_PROVIDER=local
 OCR_PROVIDER=local
 TTS_PROVIDER=browser
@@ -158,26 +156,20 @@ GOOGLE_AI_API_KEY=
 EOF
             '''
             usedEnv = true
-            echo "WARN: wrote built-in default .env.deploy (no credential / example found). Set PUBLIC_API_URL to your VPS IP:8000/api/v1"
+            echo "Wrote built-in default .env.deploy with VPS IP 187.127.138.86"
           }
 
-          // Optional parameter override for public API URL (browser-facing)
+          // Always apply PUBLIC_API_URL when provided (default param has real IP)
           if (params.PUBLIC_API_URL?.trim()) {
             def url = params.PUBLIC_API_URL.trim()
-            // Derive UI origin for CORS: http://host:8000/api/v1 -> http://host:3000
             def cors = ''
             try {
-              def withoutPath = url.split('/api')[0]  // http://host:8000
+              def withoutPath = url.split('/api')[0]
               def parts = withoutPath.tokenize(':')
-              if (parts.size() >= 2) {
-                // http + //host  OR http + //host + port
-                if (parts.size() == 2) {
-                  // http://host  (no port)
-                  cors = "${withoutPath}:3000"
-                } else {
-                  // http://host:8000 -> http://host:3000
-                  cors = "${parts[0]}:${parts[1]}:3000"
-                }
+              if (parts.size() == 2) {
+                cors = "${withoutPath}:3000"
+              } else if (parts.size() >= 3) {
+                cors = "${parts[0]}:${parts[1]}:3000"
               }
             } catch (ignored) {
               echo "Could not derive CORS from PUBLIC_API_URL; leaving CORS_ORIGINS unchanged"
@@ -196,7 +188,7 @@ EOF
                 fi
                 echo "CORS_ORIGINS set to ${cors}"
               fi
-              echo "PUBLIC_API_URL override applied: ${url}"
+              echo "PUBLIC_API_URL applied: ${url}"
             """
           }
 
@@ -217,8 +209,7 @@ EOF
             case "$api_url" in
               *YOUR_VPS_IP*|*your_vps_ip*|*YOUR_DOMAIN*|*your_domain*)
                 echo "ERROR: NEXT_PUBLIC_API_URL still contains a placeholder hostname."
-                echo "Set Jenkins param PUBLIC_API_URL=http://YOUR_REAL_IP:8000/api/v1 and rebuild."
-                echo "Example: PUBLIC_API_URL=http://187.127.138.86:8000/api/v1"
+                echo "Set PUBLIC_API_URL=http://187.127.138.86:8000/api/v1 and rebuild."
                 exit 1
                 ;;
             esac
@@ -243,7 +234,6 @@ EOF
 
           echo "Building API image..."
           # IMPORTANT: do NOT bind-mount Jenkins workspace into docker run.
-          # Jenkins-in-Docker cannot see /var/jenkins_home paths on the Docker host.
           docker build -t ${API_IMAGE} -t ${API_IMAGE_LATEST} ./apps/api
 
           echo "Building Web image (NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL})..."
@@ -286,7 +276,6 @@ EOF
           export WEB_HOST_PORT=${WEB_HOST_PORT:-3000}
           cp -f .env.deploy .env
 
-          # Export .env into this shell so compose ${VAR} substitution works
           set -a
           # shellcheck disable=SC1091
           . ./.env
@@ -358,7 +347,6 @@ EOF
           docker exec aiteacher-api curl -fsS http://127.0.0.1:8000/
           echo
           echo "=== Web responds ==="
-          # Next may need a moment; try a few times inside the web container network via API host curl to published port is flaky from Jenkins-in-Docker
           docker exec aiteacher-web wget -qO- http://127.0.0.1:3000 >/tmp/aiteacher_web.html 2>/dev/null \
             || docker exec aiteacher-web wget -qO- http://127.0.0.1:3000/ >/tmp/aiteacher_web.html 2>/dev/null \
             || true
@@ -376,8 +364,8 @@ EOF
   post {
     success {
       echo "AI Teacher ${params.DEPLOY_ENV} build #${env.BUILD_NUMBER} succeeded"
-      echo "UI: http://<VPS_HOST>:${env.WEB_HOST_PORT ?: '3000'}"
-      echo "API: http://<VPS_HOST>:${env.API_HOST_PORT ?: '8000'}/docs"
+      echo "UI: http://187.127.138.86:3000"
+      echo "API: http://187.127.138.86:8000/docs"
     }
     failure {
       echo "AI Teacher build #${env.BUILD_NUMBER} failed — check stage logs"
