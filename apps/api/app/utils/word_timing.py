@@ -20,6 +20,7 @@ SPEED_FACTORS = {
     "very_slow": 0.55,
     "slow": 0.7,
     "normal": 0.85,
+    "fast": 1.05,
 }
 
 

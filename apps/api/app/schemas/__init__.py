@@ -120,6 +120,16 @@ class LessonContentOut(BaseModel):
     sections: list[SectionOut]
 
 
+class IllustrationOut(BaseModel):
+    id: str
+    position: int
+    caption: str
+    storage_key: str
+    provider: str
+
+    model_config = {"from_attributes": True}
+
+
 class JobOut(BaseModel):
     id: str
     lesson_id: str
@@ -138,6 +148,13 @@ class UploadResponse(BaseModel):
     job_id: str
     status: str
     message: str
+
+
+class CreateFromTextRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=80_000)
+    title: Optional[str] = Field(default=None, max_length=200)
+    class_level: Optional[int] = Field(default=None, ge=1, le=10)
+    subject: Optional[str] = Field(default=None, max_length=128)
 
 
 class EditTextRequest(BaseModel):

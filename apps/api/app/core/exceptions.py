@@ -36,8 +36,9 @@ FRIENDLY_MESSAGES = {
     "IMAGE_TOO_LARGE": "That photo is a bit too big. Try one under 15 MB.",
     "OCR_FAILED": "I couldn't read this page clearly. Let's try another photo that's brighter and sharper.",
     "EMPTY_CONTENT": "I couldn't find any text on this page. Try a clearer photo of the page.",
+    "EMPTY_STORY_TEXT": "Please type a bit more of the story so I can teach it.",
     "AI_FAILED": "I had trouble understanding this page. Let's try again in a moment.",
-    "TTS_FAILED": "I couldn't prepare the narration right now. You can still read the lesson.",
+    "CANNOT_DELETE_DEMO": "That's a shared demo story — keep it for practice, or upload your own pages.",
     "QUIZ_FAILED": "I couldn't prepare questions just yet. Let's try again.",
     "UNSUPPORTED_LANGUAGE": "I'm still learning that language. English, Hindi, and Marathi work best for now.",
 }

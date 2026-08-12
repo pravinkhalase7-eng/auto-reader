@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Image as ImageIcon, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { ContentTypeBadge, LanguageBadge } from "@/components/badges";
+import { StoryIllustrations } from "@/components/story-illustrations";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api, getToken } from "@/lib/api";
@@ -28,7 +29,8 @@ export default function LessonPreviewPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [showImage, setShowImage] = useState(true);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [pageImages, setPageImages] = useState<{ page: number; url: string }[]>([]);
+  const [activePage, setActivePage] = useState(0);
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -46,30 +48,44 @@ export default function LessonPreviewPage() {
     setTitle(lesson.title || "");
   }, [lesson]);
 
-  // Load original page with auth header (img src can't send Bearer token)
+  // Load original pages with auth header (img src can't send Bearer token)
   useEffect(() => {
-    let objectUrl: string | null = null;
-    async function loadImage() {
-      const key = lesson?.pages?.[0]?.original_storage_key;
-      if (!key || !token) {
-        setImageUrl(null);
+    const urls: string[] = [];
+    let cancelled = false;
+    async function loadImages() {
+      const pages = [...(lesson?.pages || [])].sort((a, b) => a.page_number - b.page_number);
+      if (!pages.length || !token) {
+        setPageImages([]);
         return;
       }
-      try {
-        const res = await fetch(`${API_URL}/storage/${key}`, {
-          headers: { Authorization: `Bearer ${getToken()}` },
-        });
-        if (!res.ok) return;
-        const blob = await res.blob();
-        objectUrl = URL.createObjectURL(blob);
-        setImageUrl(objectUrl);
-      } catch {
-        setImageUrl(null);
+      const loaded: { page: number; url: string }[] = [];
+      for (const page of pages) {
+        try {
+          const res = await fetch(`${API_URL}/storage/${page.original_storage_key}`, {
+            headers: { Authorization: `Bearer ${getToken()}` },
+          });
+          if (!res.ok) continue;
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            continue;
+          }
+          urls.push(url);
+          loaded.push({ page: page.page_number, url });
+        } catch {
+          /* skip missing page */
+        }
+      }
+      if (!cancelled) {
+        setPageImages(loaded);
+        setActivePage(0);
       }
     }
-    void loadImage();
+    void loadImages();
     return () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      cancelled = true;
+      urls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [lesson?.pages, token]);
 
@@ -185,6 +201,16 @@ export default function LessonPreviewPage() {
                 {saving ? "Saving..." : "Looks good — Start learning"}
                 <ArrowRight className="h-4 w-4" />
               </Button>
+              {!lesson.is_demo ? (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  onClick={() => router.push(`/lessons/${id}?continue=1`)}
+                  disabled={saving}
+                >
+                  Add more pages
+                </Button>
+              ) : null}
               <Button
                 size="lg"
                 variant="outline"
@@ -200,36 +226,55 @@ export default function LessonPreviewPage() {
             <Card className="bg-amber-50/80">
               <p className="font-display text-xl font-semibold text-teal-950">AI Teacher</p>
               <p className="mt-2 text-sm text-teal-900/75">
-                I read your photo. Please fix anything that looks wrong, then we&apos;ll practice
-                together.
+                I read your photo{lesson.page_count > 1 ? "s" : ""}. Please fix anything that looks
+                wrong, then we&apos;ll practice together.
               </p>
             </Card>
 
             <Card>
               <div className="mb-3 flex items-center justify-between gap-2">
-                <p className="font-semibold text-teal-950">Original page</p>
+                <p className="font-semibold text-teal-950">
+                  Original {pageImages.length > 1 ? "pages" : "page"}
+                </p>
                 <Button variant="ghost" size="sm" onClick={() => setShowImage((v) => !v)}>
                   <ImageIcon className="h-4 w-4" />
                   {showImage ? "Hide" : "Show"}
                 </Button>
               </div>
               {showImage ? (
-                imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={imageUrl}
-                    alt="Uploaded textbook page"
-                    className="max-h-[70vh] w-full rounded-2xl object-contain"
-                  />
+                pageImages.length ? (
+                  <div className="space-y-3">
+                    {pageImages.length > 1 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {pageImages.map((img, i) => (
+                          <Button
+                            key={img.url}
+                            size="sm"
+                            variant={i === activePage ? "default" : "outline"}
+                            onClick={() => setActivePage(i)}
+                          >
+                            Page {img.page}
+                          </Button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={pageImages[activePage]?.url}
+                      alt={`Uploaded textbook page ${pageImages[activePage]?.page ?? 1}`}
+                      className="max-h-[70vh] w-full rounded-2xl object-contain"
+                    />
+                  </div>
                 ) : (
                   <p className="text-sm text-teal-900/60">
                     {lesson.pages?.length
-                      ? "Loading original photo..."
+                      ? "Loading original photos..."
                       : "No original photo for this lesson (demo text)."}
                   </p>
                 )
               ) : null}
             </Card>
+            {id ? <StoryIllustrations lessonId={id} paragraphCount={1} /> : null}
           </aside>
         </div>
       )}

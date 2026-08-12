@@ -7,14 +7,15 @@ from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 
 def _drop_bright_chroma(rgb: Image.Image) -> Image.Image:
-    """Keep luminance, bleach bright colorful pixels (illustrations, color fringing)."""
+    """Keep dark ink; bleach colorful pixels (illustrations, color fringing)."""
     y, cb, cr = rgb.convert("YCbCr").split()
     cb_dev = ImageChops.difference(cb, Image.new("L", cb.size, 128))
     cr_dev = ImageChops.difference(cr, Image.new("L", cr.size, 128))
     chroma = ImageChops.add(cb_dev, cr_dev)
-    colorful = chroma.point(lambda p: 255 if p > 28 else 0)
-    bright = y.point(lambda p: 255 if p > 110 else 0)
-    mask = ImageChops.multiply(colorful, bright)
+    colorful = chroma.point(lambda p: 255 if p > 16 else 0)
+    dark_ink = y.point(lambda p: 255 if p < 95 else 0)
+    not_ink = ImageChops.invert(dark_ink)
+    mask = ImageChops.multiply(colorful, not_ink)
     return Image.composite(Image.new("L", y.size, 255), y, mask)
 
 

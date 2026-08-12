@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { AppShell } from "@/components/app-shell";
 import { LessonViewer } from "@/components/lesson-viewer";
 import { ReadingPlayer } from "@/components/reading-player";
+import { StoryIllustrations, useStoryIllustrationAssets } from "@/components/story-illustrations";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
@@ -34,8 +35,12 @@ export default function ReadPage() {
     enabled: !!token && !!id,
   });
 
+  const illustrations = useStoryIllustrationAssets(id || "");
+
   if (!token) return null;
   const content = contentQuery.data;
+  const paragraphCount =
+    content?.sections.reduce((sum, section) => sum + section.paragraphs.length, 0) ?? 0;
 
   return (
     <AppShell>
@@ -57,17 +62,40 @@ export default function ReadPage() {
         </div>
       </div>
 
+      {contentQuery.isError ? (
+        <p className="mb-4 text-sm text-rose-700">
+          {contentQuery.error instanceof Error
+            ? contentQuery.error.message
+            : "I couldn't load this lesson."}
+        </p>
+      ) : null}
+
+      {id ? (
+        <div className="mb-6">
+          <StoryIllustrations lessonId={id} paragraphCount={paragraphCount} />
+        </div>
+      ) : null}
+
       <div className="grid gap-6 lg:grid-cols-[1.5fr_0.9fr]">
         <Card className="max-h-[70vh] overflow-y-auto p-6 md:p-8">
-          {content ? <LessonViewer content={content} /> : <p>Preparing your lesson...</p>}
+          {content ? (
+            <LessonViewer
+              content={content}
+              scenes={illustrations.scenes}
+              urls={illustrations.urls}
+            />
+          ) : (
+            <p>Preparing your lesson...</p>
+          )}
         </Card>
         <div className="space-y-4">
           {content ? <ReadingPlayer content={content} audio={audioQuery.data || null} /> : null}
           <Card className="bg-amber-50/80">
             <p className="font-display text-xl font-semibold text-teal-950">Listen carefully.</p>
             <p className="mt-2 text-sm text-teal-900/70">
-              Use <strong>Normal play</strong> for a natural reading pace, or <strong>Word by word</strong>{" "}
-              for careful practice.
+              <strong>Direct reading</strong> narrates the story like a teacher, with no word
+              highlight. Use <strong>Natural reading</strong> or <strong>Word by word</strong> when
+              you want the spoken word to light up.
             </p>
           </Card>
         </div>

@@ -11,7 +11,7 @@ class LocalStorageProvider(StorageProvider):
         settings = get_settings()
         self.root = Path(root or settings.storage_root)
         self.root.mkdir(parents=True, exist_ok=True)
-        for sub in ("originals", "processed", "audio"):
+        for sub in ("originals", "processed", "audio", "illustrations"):
             (self.root / sub).mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:

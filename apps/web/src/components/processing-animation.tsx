@@ -4,13 +4,24 @@ import { motion } from "framer-motion";
 import { CheckCircle2, Sparkles } from "lucide-react";
 import { ProgressBar } from "@/components/ui/progress-bar";
 
-const STEPS = [
-  { key: "uploaded", label: "I've got your photo!" },
-  { key: "ocr", label: "I'm reading your textbook page..." },
+const PHOTO_STEPS = [
+  { key: "uploaded", label: "I've got your story!" },
+  { key: "ocr", label: "I'm reading your textbook pages..." },
   { key: "understanding", label: "I'm understanding the content..." },
   { key: "language", label: "I'm detecting the language..." },
   { key: "preparing_lesson", label: "I'm preparing your lesson..." },
   { key: "preparing_teacher", label: "I'm preparing your AI Teacher..." },
+  { key: "illustrating", label: "I'm drawing the story pictures..." },
+  { key: "completed", label: "Your lesson is ready!" },
+];
+
+const TEXT_STEPS = [
+  { key: "uploaded", label: "I've got your story!" },
+  { key: "understanding", label: "I'm understanding the story..." },
+  { key: "language", label: "I'm detecting the language..." },
+  { key: "preparing_lesson", label: "I'm preparing your lesson..." },
+  { key: "preparing_teacher", label: "I'm preparing your AI Teacher..." },
+  { key: "illustrating", label: "I'm drawing the story pictures..." },
   { key: "completed", label: "Your lesson is ready!" },
 ];
 
@@ -18,14 +29,17 @@ export function ProcessingAnimation({
   currentStep,
   progress,
   message,
+  source = "photos",
 }: {
   currentStep: string;
   progress: number;
   message: string;
+  source?: "photos" | "text";
 }) {
+  const steps = source === "text" ? TEXT_STEPS : PHOTO_STEPS;
   const currentIdx = Math.max(
     0,
-    STEPS.findIndex((s) => s.key === currentStep),
+    steps.findIndex((s) => s.key === currentStep),
   );
 
   return (
@@ -43,7 +57,7 @@ export function ProcessingAnimation({
         <ProgressBar value={progress} label="Lesson preparation" />
       </div>
       <ul className="mt-6 space-y-3 text-left">
-        {STEPS.map((step, i) => {
+        {steps.map((step, i) => {
           const done = i < currentIdx || currentStep === "completed";
           const active = i === currentIdx && currentStep !== "completed";
           return (

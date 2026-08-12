@@ -11,14 +11,18 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useReaderStore } from "@/store/reader-store";
-import type { AudioAsset, LessonContent, PlaybackStyle, SpeedOption } from "@/types";
+import type { AudioAsset, LessonContent, SpeedOption } from "@/types";
 import { cn } from "@/lib/utils";
 import {
   buildUtterance,
   cancelSpeech,
-  SPEED_RATE,
+  expressionForKind,
+  interWordPauseMs,
+  speakableWord,
+  trailingPunctKind,
   voicesForLanguage,
   waitForVoices,
+  type SpeechExpression,
 } from "@/lib/speech";
 
 type FlatWord = {
@@ -33,7 +37,6 @@ type FlatSentence = {
   paragraphId: string;
   words: FlatWord[];
   text: string;
-  ranges: { start: number; end: number; wordOffset: number }[];
   globalStart: number;
 };
 
@@ -41,8 +44,6 @@ type FlatParagraph = {
   id: string;
   startWord: number;
   startSentence: number;
-  text: string;
-  ranges: { start: number; end: number; globalWord: number }[];
 };
 
 function flattenContent(content: LessonContent) {
@@ -54,37 +55,21 @@ function flattenContent(content: LessonContent) {
     for (const para of section.paragraphs) {
       const startWord = words.length;
       const startSentence = sentences.length;
-      let paraText = "";
-      const paraRanges: FlatParagraph["ranges"] = [];
 
       for (const sent of para.sentences) {
         const sentWords: FlatWord[] = [];
-        let text = "";
-        const ranges: FlatSentence["ranges"] = [];
         const globalStart = words.length;
 
-        sent.words.forEach((w, wordOffset) => {
-          if (text.length > 0) text += " ";
-          const start = text.length;
-          text += w.text;
+        sent.words.forEach((w) => {
+          const token = w.text.normalize("NFC");
           const flat = {
             id: w.id,
-            text: w.text,
+            text: token,
             sentenceId: sent.id,
             paragraphId: para.id,
           };
           sentWords.push(flat);
           words.push(flat);
-          ranges.push({ start, end: text.length, wordOffset });
-
-          if (paraText.length > 0) paraText += " ";
-          const pStart = paraText.length;
-          paraText += w.text;
-          paraRanges.push({
-            start: pStart,
-            end: paraText.length,
-            globalWord: globalStart + wordOffset,
-          });
         });
 
         if (sentWords.length) {
@@ -92,8 +77,7 @@ function flattenContent(content: LessonContent) {
             id: sent.id,
             paragraphId: para.id,
             words: sentWords,
-            text,
-            ranges,
+            text: sentWords.map((w) => w.text).join(" "),
             globalStart,
           });
         }
@@ -103,26 +87,11 @@ function flattenContent(content: LessonContent) {
         id: para.id,
         startWord,
         startSentence,
-        text: paraText,
-        ranges: paraRanges,
       });
     }
   }
 
   return { words, sentences, paragraphs };
-}
-
-function globalWordAtChar(
-  ranges: FlatParagraph["ranges"],
-  charIndex: number,
-): number {
-  if (!ranges.length) return 0;
-  let match = ranges[0].globalWord;
-  for (const r of ranges) {
-    if (charIndex >= r.start) match = r.globalWord;
-    if (charIndex >= r.start && charIndex < r.end) return r.globalWord;
-  }
-  return match;
 }
 
 function sleep(ms: number) {
@@ -161,7 +130,6 @@ export function ReadingPlayer({
   );
 
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
-  const [voicesReady, setVoicesReady] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const cancelledRef = useRef(false);
@@ -169,21 +137,16 @@ export function ReadingPlayer({
   const runIdRef = useRef(0);
   const wordCursorRef = useRef(0);
   const sentenceCursorRef = useRef(0);
-  const estimateTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     waitForVoices().then((voices) => {
       setAvailableVoices(voicesForLanguage(content.language, voices));
-      setVoicesReady(true);
     });
   }, [content.language]);
 
-  const clearEstimate = () => {
-    if (estimateTimerRef.current) {
-      window.clearInterval(estimateTimerRef.current);
-      estimateTimerRef.current = null;
-    }
-  };
+  useEffect(() => {
+    setPreferredVoiceURI(null);
+  }, [content.language, setPreferredVoiceURI]);
 
   const activateGlobal = useCallback(
     (index: number) => {
@@ -201,85 +164,75 @@ export function ReadingPlayer({
     (
       text: string,
       voices: SpeechSynthesisVoice[],
-      onBoundary?: (charIndex: number) => void,
+      handlers?: {
+        onStart?: () => void;
+        expression?: SpeechExpression;
+        keepAlive?: boolean;
+      },
     ) =>
-      new Promise<"ended" | "error">((resolve) => {
+      new Promise<"ended" | "error" | "interrupted">((resolve) => {
         const { utterance, warning } = buildUtterance(text, {
           language: content.language,
           speed,
           volume,
           voices,
           preferredVoiceURI,
+          pitch: handlers?.expression?.pitch,
+          rateMul: handlers?.expression?.rateMul,
+          keepAlive: handlers?.keepAlive ?? false,
         });
         if (warning) setVoiceWarning(warning);
-        utterance.onboundary = (event) => {
-          if (event.name && event.name !== "word") return;
-          onBoundary?.(event.charIndex);
-        };
+        utterance.onstart = () => handlers?.onStart?.();
         utterance.onend = () => resolve("ended");
-        utterance.onerror = () => resolve("error");
+        utterance.onerror = (event) => {
+          const err = event.error;
+          resolve(err === "interrupted" || err === "canceled" ? "interrupted" : "error");
+        };
         window.speechSynthesis.speak(utterance);
       }),
     [content.language, preferredVoiceURI, speed, volume],
   );
 
-  /** Fluent playback: whole paragraph so intonation stays natural. */
-  const speakParagraphNatural = useCallback(
-    async (paragraph: FlatParagraph, voices: SpeechSynthesisVoice[], runId: number) => {
-      if (!paragraph.ranges.length) return;
-      activateGlobal(paragraph.startWord);
-      let boundaryHits = 0;
-
-      const msPerWord = Math.max(180, Math.round(300 / SPEED_RATE[speed]));
-
-      let est = 0;
-      clearEstimate();
-      estimateTimerRef.current = window.setInterval(() => {
-        if (pausedRef.current || cancelledRef.current || runIdRef.current !== runId) return;
-        if (boundaryHits > 0) return;
-        const wordCount = paragraph.ranges.length;
-        if (est < wordCount) {
-          activateGlobal(paragraph.startWord + est);
-          est += 1;
-        }
-      }, msPerWord);
-
-      await speakUtterance(paragraph.text, voices, (charIndex) => {
-        boundaryHits += 1;
-        activateGlobal(globalWordAtChar(paragraph.ranges, charIndex));
-      });
-
-      clearEstimate();
-      activateGlobal(paragraph.startWord + paragraph.ranges.length - 1);
-    },
-    [activateGlobal, speakUtterance, speed],
-  );
-
-  /** Careful karaoke: one word at a time. */
-  const speakSentenceWordByWord = useCallback(
-    async (sentence: FlatSentence, voices: SpeechSynthesisVoice[], runId: number) => {
-      for (let i = 0; i < sentence.words.length; i++) {
-        if (cancelledRef.current || runIdRef.current !== runId) return;
-        while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
-          await sleep(80);
-        }
-        if (cancelledRef.current || runIdRef.current !== runId) return;
-
-        activateGlobal(sentence.globalStart + i);
-        await speakUtterance(sentence.words[i].text, voices);
-        await sleep(content.language === "en" ? 25 : 40);
+  const waitIfActive = useCallback(async (ms: number, runId: number) => {
+    let left = ms;
+    while (left > 0) {
+      if (cancelledRef.current || runIdRef.current !== runId) return false;
+      while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
+        await sleep(80);
       }
+      if (cancelledRef.current || runIdRef.current !== runId) return false;
+      const slice = Math.min(40, left);
+      await sleep(slice);
+      left -= slice;
+    }
+    return true;
+  }, []);
+
+  const narrationChunks = useCallback(
+    (startPara: number) => {
+      const chunks: { paragraphId: string; paragraphIndex: number; text: string }[] = [];
+      for (let p = startPara; p < paragraphs.length; p++) {
+        const para = paragraphs[p];
+        const paraSentences = sentences.filter((s) => s.paragraphId === para.id);
+        const texts = paraSentences.map((s) => s.text).filter(Boolean);
+        if (!texts.length) continue;
+        const joined = texts.join(" ");
+        if (joined.length <= 360) {
+          chunks.push({ paragraphId: para.id, paragraphIndex: p, text: joined });
+        } else {
+          for (const text of texts) {
+            chunks.push({ paragraphId: para.id, paragraphIndex: p, text });
+          }
+        }
+      }
+      return chunks;
     },
-    [activateGlobal, content.language, speakUtterance],
+    [paragraphs, sentences],
   );
 
-  const firstSentenceForParagraph = useCallback(
-    (pIndex: number) => paragraphs[Math.max(0, Math.min(pIndex, paragraphs.length - 1))]?.startSentence ?? 0,
-    [paragraphs],
-  );
-
-  const runFromSentence = useCallback(
-    async (startSentence: number) => {
+  /** Fluent teacher narration — whole phrases, no word highlight. */
+  const speakDirect = useCallback(
+    async (startPara: number) => {
       if (typeof window === "undefined" || !window.speechSynthesis) return;
       if (mode === "read") {
         setPlaying(true);
@@ -290,89 +243,179 @@ export function ReadingPlayer({
       cancelledRef.current = false;
       pausedRef.current = false;
       setPlaying(true);
+      setActive(null, null, paragraphs[startPara]?.id ?? null);
       cancelSpeech();
-      clearEstimate();
-      await sleep(30);
+      await sleep(60);
 
       const voices = await waitForVoices();
-      const style: PlaybackStyle = playbackStyle;
+      const chunks = narrationChunks(Math.max(0, startPara));
 
-      if (style === "natural") {
-        const startPara = paragraphs.findIndex((_, idx) => {
-          const nextStart = paragraphs[idx + 1]?.startSentence ?? sentences.length;
-          return startSentence >= paragraphs[idx].startSentence && startSentence < nextStart;
-        });
-        const from = Math.max(0, startPara);
-
-        for (let i = from; i < paragraphs.length; i++) {
-          if (cancelledRef.current || runIdRef.current !== runId) break;
-          while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
-            await sleep(80);
-          }
-          if (cancelledRef.current || runIdRef.current !== runId) break;
-
-          const paragraph = paragraphs[i];
-          sentenceCursorRef.current = paragraph.startSentence;
-          setParagraphIndex(i);
-          await speakParagraphNatural(paragraph, voices, runId);
-          if (!cancelledRef.current && runIdRef.current === runId) {
-            await sleep(220);
-          }
+      for (const chunk of chunks) {
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
+          await sleep(80);
         }
-      } else {
-        for (let i = startSentence; i < sentences.length; i++) {
-          if (cancelledRef.current || runIdRef.current !== runId) break;
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+
+        setParagraphIndex(chunk.paragraphIndex);
+        setActive(null, null, chunk.paragraphId);
+        sentenceCursorRef.current = paragraphs[chunk.paragraphIndex]?.startSentence ?? 0;
+        wordCursorRef.current = paragraphs[chunk.paragraphIndex]?.startWord ?? 0;
+
+        const result = await speakUtterance(chunk.text, voices, {
+          keepAlive: true,
+          expression: { pitch: 1.04, rateMul: 1, pauseAfterMs: 0 },
+          onStart: () => setActive(null, null, chunk.paragraphId),
+        });
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        if (result === "interrupted") return;
+        await waitIfActive(220, runId);
+      }
+
+      if (runIdRef.current === runId) {
+        setPlaying(false);
+        setActive(null);
+      }
+    },
+    [
+      mode,
+      narrationChunks,
+      paragraphs,
+      setActive,
+      setParagraphIndex,
+      setPlaying,
+      speakUtterance,
+      waitIfActive,
+    ],
+  );
+
+  /** One spoken word = one highlighted word. Advance only after that utterance ends. */
+  const speakFromWord = useCallback(
+    async (startWord: number) => {
+      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      if (mode === "read") {
+        setPlaying(true);
+        return;
+      }
+      if (playbackStyle === "direct") {
+        let para = 0;
+        for (let i = 0; i < paragraphs.length; i++) {
+          if (startWord >= paragraphs[i].startWord) para = i;
+        }
+        await speakDirect(para);
+        return;
+      }
+
+      const runId = ++runIdRef.current;
+      cancelledRef.current = false;
+      pausedRef.current = false;
+      setPlaying(true);
+      cancelSpeech();
+      await sleep(60);
+
+      const voices = await waitForVoices();
+      const natural = playbackStyle === "natural";
+      const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
+
+      for (let s = 0; s < sentences.length; s++) {
+        const sentence = sentences[s];
+        if (sentence.globalStart + sentence.words.length - 1 < from) continue;
+
+        sentenceCursorRef.current = s;
+        const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
+        if (pIdx >= 0) setParagraphIndex(pIdx);
+
+        for (let i = 0; i < sentence.words.length; i++) {
+          const global = sentence.globalStart + i;
+          if (global < from) continue;
+          if (cancelledRef.current || runIdRef.current !== runId) return;
           while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
             await sleep(80);
           }
-          if (cancelledRef.current || runIdRef.current !== runId) break;
+          if (cancelledRef.current || runIdRef.current !== runId) return;
 
-          sentenceCursorRef.current = i;
-          const sentence = sentences[i];
-          const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
-          if (pIdx >= 0) setParagraphIndex(pIdx);
+          const token = sentence.words[i].text;
+          const spoken = speakableWord(token);
+          if (!spoken) {
+            activateGlobal(global);
+            continue;
+          }
 
-          await speakSentenceWordByWord(sentence, voices, runId);
+          const kind = trailingPunctKind(token);
+          const expression = expressionForKind(kind, content.language, global, speed);
+          let started = false;
+          const t0 = performance.now();
+          const result = await speakUtterance(spoken, voices, {
+            expression,
+            onStart: () => {
+              started = true;
+              activateGlobal(global);
+            },
+          });
+
+          if (!started) activateGlobal(global);
+          if (cancelledRef.current || runIdRef.current !== runId) return;
+          if (result === "interrupted") return;
+
+          const elapsed = performance.now() - t0;
+          if (result === "ended" && elapsed < 80) {
+            await waitIfActive(80 - elapsed, runId);
+          }
+          if (cancelledRef.current || runIdRef.current !== runId) return;
+
+          const pause =
+            kind === "continue"
+              ? interWordPauseMs(speed, natural ? "natural" : "word", content.language)
+              : expression.pauseAfterMs;
+          await waitIfActive(pause, runId);
         }
       }
 
       if (runIdRef.current === runId) setPlaying(false);
     },
     [
+      activateGlobal,
+      content.language,
       mode,
       paragraphs,
       playbackStyle,
       sentences,
       setParagraphIndex,
       setPlaying,
-      speakParagraphNatural,
-      speakSentenceWordByWord,
+      speakDirect,
+      speakUtterance,
+      speed,
+      waitIfActive,
+      words.length,
     ],
+  );
+
+  const firstWordForParagraph = useCallback(
+    (pIndex: number) => paragraphs[Math.max(0, Math.min(pIndex, paragraphs.length - 1))]?.startWord ?? 0,
+    [paragraphs],
   );
 
   const stopAll = useCallback(() => {
     cancelledRef.current = true;
     pausedRef.current = false;
     runIdRef.current += 1;
-    clearEstimate();
     cancelSpeech();
     setPlaying(false);
   }, [setPlaying]);
 
   const play = () => {
-    void runFromSentence(firstSentenceForParagraph(paragraphIndex));
+    void speakFromWord(firstWordForParagraph(paragraphIndex));
   };
 
   const pause = () => {
     pausedRef.current = true;
-    clearEstimate();
     cancelSpeech();
     setPlaying(false);
   };
 
   const resume = () => {
     pausedRef.current = false;
-    void runFromSentence(sentenceCursorRef.current);
+    void speakFromWord(wordCursorRef.current);
   };
 
   const restart = () => {
@@ -380,14 +423,20 @@ export function ReadingPlayer({
     reset();
     sentenceCursorRef.current = 0;
     wordCursorRef.current = 0;
-    window.setTimeout(() => void runFromSentence(0), 60);
+    window.setTimeout(() => void speakFromWord(0), 60);
   };
 
   useEffect(() => () => stopAll(), [stopAll]);
 
   const activeIndex = words.findIndex((w) => w.id === activeWordId);
   const progress =
-    words.length === 0 ? 0 : ((Math.max(activeIndex, 0) + 1) / words.length) * 100;
+    playbackStyle === "direct"
+      ? paragraphs.length === 0
+        ? 0
+        : ((paragraphIndex + 1) / paragraphs.length) * 100
+      : words.length === 0
+        ? 0
+        : ((Math.max(activeIndex, 0) + 1) / words.length) * 100;
 
   return (
     <div className="rounded-3xl border border-teal-900/10 bg-white/95 p-4 shadow-lg">
@@ -416,7 +465,24 @@ export function ReadingPlayer({
       <div className="mb-3 flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => setPlaybackStyle("natural")}
+          onClick={() => {
+            stopAll();
+            setActive(null);
+            setPlaybackStyle("direct");
+          }}
+          className={cn(
+            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            playbackStyle === "direct" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
+          )}
+        >
+          Direct reading
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            stopAll();
+            setPlaybackStyle("natural");
+          }}
           className={cn(
             "rounded-full px-3 py-1.5 text-xs font-semibold",
             playbackStyle === "natural" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
@@ -426,7 +492,10 @@ export function ReadingPlayer({
         </button>
         <button
           type="button"
-          onClick={() => setPlaybackStyle("word")}
+          onClick={() => {
+            stopAll();
+            setPlaybackStyle("word");
+          }}
           className={cn(
             "rounded-full px-3 py-1.5 text-xs font-semibold",
             playbackStyle === "word" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
@@ -458,7 +527,7 @@ export function ReadingPlayer({
             stopAll();
             const next = Math.max(0, paragraphIndex - 1);
             setParagraphIndex(next);
-            sentenceCursorRef.current = firstSentenceForParagraph(next);
+            wordCursorRef.current = firstWordForParagraph(next);
           }}
         >
           <SkipBack className="h-4 w-4" />
@@ -467,7 +536,7 @@ export function ReadingPlayer({
           <Button
             size="lg"
             aria-label="Play"
-            disabled={!voicesReady && mode !== "read"}
+            disabled={words.length === 0}
             onClick={pausedRef.current ? resume : play}
           >
             <Play className="h-5 w-5" /> Play
@@ -488,7 +557,7 @@ export function ReadingPlayer({
             stopAll();
             const next = Math.min(paragraphs.length - 1, paragraphIndex + 1);
             setParagraphIndex(next);
-            sentenceCursorRef.current = firstSentenceForParagraph(next);
+            wordCursorRef.current = firstWordForParagraph(next);
           }}
         >
           <SkipForward className="h-4 w-4" />
@@ -507,6 +576,7 @@ export function ReadingPlayer({
             <option value="very_slow">Very Slow</option>
             <option value="slow">Slow</option>
             <option value="normal">Normal</option>
+            <option value="fast">Fast</option>
           </select>
         </label>
         <label className="flex items-center gap-2 text-teal-900">

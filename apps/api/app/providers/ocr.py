@@ -95,7 +95,7 @@ def _tess_lang_string(language_hint: str | None = None) -> str:
     return "+".join(seen)
 
 
-def _text_from_tesseract_data(data: dict, min_conf: int = 40) -> tuple[str, float]:
+def _text_from_tesseract_data(data: dict, min_conf: int = 55) -> tuple[str, float]:
     """Rebuild text from confident words only, preserving line breaks."""
     n = len(data.get("text") or [])
     lines: list[str] = []

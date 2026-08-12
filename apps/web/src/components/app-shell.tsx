@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, Home, LogOut, Upload, User } from "lucide-react";
+import { BookOpen, BookPlus, Home, LogOut, User } from "lucide-react";
 import { useAuthStore } from "@/store/auth-store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/lessons", label: "Lessons", icon: BookOpen },
-  { href: "/upload", label: "Upload", icon: Upload },
+  { href: "/upload", label: "New story", icon: BookPlus },
   { href: "/profile", label: "Profile", icon: User },
 ];
 

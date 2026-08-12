@@ -103,6 +103,8 @@ def test_ocr_clean_drops_noise_keeps_story():
 
     ||| ~~ ©
     12
+    ~ | • • •
+    rn cl
 
     One day, a lion was sleeping in the forest.
     • • •
@@ -112,6 +114,7 @@ def test_ocr_clean_drops_noise_keeps_story():
     assert "sleeping" in cleaned
     assert "|||" not in cleaned
     assert "~~" not in cleaned
+    assert "rn" not in cleaned.split()
     assert cleaned.splitlines()[-1].strip() != "12"
 
 
@@ -120,6 +123,56 @@ def test_ocr_clean_keeps_devanagari():
 
     text = "एक दिन जंगल में एक शेर सो रहा था।"
     assert "शेर" in clean_ocr_text(text)
+
+
+def test_merge_page_texts_stitches_mid_sentence_breaks():
+    from app.utils.ocr_clean import merge_page_texts
+
+    merged = merge_page_texts(
+        [
+            "The lion slept under a tree and dreamed of",
+            "the forest. A mouse ran by.",
+            "Later they became friends.",
+        ]
+    )
+    assert "dreamed of the forest." in merged
+    assert "A mouse ran by." in merged
+    assert "Later they became friends." in merged
+
+
+def test_merge_page_texts_skips_empty_pages():
+    from app.utils.ocr_clean import merge_page_texts
+
+    assert merge_page_texts(["Hello.", "", "  ", "World."]) == "Hello.\n\nWorld."
+
+
+def test_plan_scenes_local_keeps_story_order():
+    from app.services.story_illustrations import plan_scenes_local
+
+    text = (
+        "The lion slept under a tree. A mouse ran over his paw. "
+        "The lion woke up angry. The mouse promised to help. "
+        "Later the lion was caught in a net. The mouse chewed the ropes and set him free."
+    )
+    scenes = plan_scenes_local(text, "The Lion and the Mouse", "en")
+    assert 3 <= len(scenes) <= 6
+    assert scenes[0].position == 0
+    assert "lion" in scenes[0].caption.lower() or "lion" in scenes[0].visual.lower()
+    assert scenes[-1].position == len(scenes) - 1
+
+
+def test_placeholder_illustration_is_png():
+    from app.services.story_illustrations import render_placeholder_png
+
+    png = render_placeholder_png(
+        "The lion slept under a tree. A mouse ran over his paw.",
+        0,
+        4,
+        "The Lion and the Mouse",
+        "lion sleeping under a tree with a mouse",
+    )
+    assert png.startswith(b"\x89PNG")
+    assert len(png) > 200
 
 
 def test_tesseract_data_filters_low_confidence():
@@ -220,5 +273,96 @@ async def test_persist_content_tree_replaces_words_with_timings(tmp_path):
         assert "woke" in (lesson.edited_text or "")
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_upload_multiple_pages_then_delete_lesson(client):
+    from io import BytesIO
+
+    from PIL import Image
+
+    def png_bytes() -> bytes:
+        buf = BytesIO()
+        Image.new("RGB", (16, 16), "white").save(buf, format="PNG")
+        return buf.getvalue()
+
+    res = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "pages@example.com",
+            "password": "secret12",
+            "full_name": "Page Student",
+            "class_level": 3,
+        },
+    )
+    assert res.status_code == 200
+    token = res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    blob = png_bytes()
+    up = await client.post(
+        "/api/v1/lessons/upload",
+        headers=headers,
+        files=[
+            ("files", ("p1.png", blob, "image/png")),
+            ("files", ("p2.png", blob, "image/png")),
+        ],
+    )
+    assert up.status_code == 200
+    lesson_id = up.json()["lesson_id"]
+    detail = await client.get(f"/api/v1/lessons/{lesson_id}", headers=headers)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["page_count"] == 2
+    assert len(body["pages"]) == 2
+
+    deleted = await client.delete(f"/api/v1/lessons/{lesson_id}", headers=headers)
+    assert deleted.status_code == 200
+    gone = await client.get(f"/api/v1/lessons/{lesson_id}", headers=headers)
+    assert gone.status_code == 404
+    listed = await client.get("/api/v1/lessons", headers=headers)
+    assert all(item["id"] != lesson_id for item in listed.json())
+
+
+@pytest.mark.asyncio
+async def test_create_lesson_from_text(client):
+    res = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "typed@example.com",
+            "password": "secret12",
+            "full_name": "Typed Student",
+            "class_level": 3,
+        },
+    )
+    assert res.status_code == 200
+    token = res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    too_short = await client.post(
+        "/api/v1/lessons/from-text",
+        headers=headers,
+        json={"text": "Too short"},
+    )
+    assert too_short.status_code == 400
+
+    story = (
+        "Once upon a time a lion slept in the forest. "
+        "A little mouse ran across his paw and woke him up."
+    )
+    created = await client.post(
+        "/api/v1/lessons/from-text",
+        headers=headers,
+        json={"text": story, "title": "The Lion and the Mouse"},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    lesson_id = body["lesson_id"]
+    detail = await client.get(f"/api/v1/lessons/{lesson_id}", headers=headers)
+    assert detail.status_code == 200
+    lesson = detail.json()
+    assert lesson["title"] == "The Lion and the Mouse"
+    assert lesson["page_count"] == 0
+    assert "lion slept" in (lesson["original_text"] or "")
+    assert lesson["pages"] == []
 
 

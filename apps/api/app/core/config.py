@@ -4,9 +4,15 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_API_ROOT = Path(__file__).resolve().parents[2]
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(_API_ROOT / ".env", Path(".env")),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_name: str = "AI Teacher"
     environment: str = "development"
@@ -26,6 +32,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_ai_api_key: str = ""
     google_cloud_api_key: str = ""
+    gemini_image_model: str = "gemini-3.1-flash-image"
 
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""

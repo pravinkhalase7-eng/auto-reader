@@ -95,6 +95,12 @@ class Lesson(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     jobs: Mapped[list["AIProcessingJob"]] = relationship(
         back_populates="lesson", cascade="all, delete-orphan", lazy="selectin"
     )
+    illustrations: Mapped[list["LessonIllustration"]] = relationship(
+        back_populates="lesson",
+        cascade="all, delete-orphan",
+        order_by="LessonIllustration.position",
+        lazy="selectin",
+    )
 
 
 class LessonPage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -327,3 +333,16 @@ class AIProcessingJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     lesson: Mapped["Lesson"] = relationship(back_populates="jobs")
+
+
+class LessonIllustration(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "lesson_illustrations"
+
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    caption: Mapped[str] = mapped_column(Text, default="")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    storage_key: Mapped[str] = mapped_column(String(512), default="")
+    provider: Mapped[str] = mapped_column(String(32), default="local")
+
+    lesson: Mapped["Lesson"] = relationship(back_populates="illustrations")

@@ -6,7 +6,7 @@ import { ArrowRight, BookOpenCheck, Headphones, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const steps = [
-  { title: "Upload", desc: "Snap a textbook page" },
+  { title: "Add", desc: "Type or snap a story" },
   { title: "Understand", desc: "AI Teacher reads it" },
   { title: "Listen", desc: "Words light up as you hear" },
   { title: "Quiz", desc: "Practice in your language" },
@@ -50,7 +50,7 @@ export default function LandingPage() {
             transition={{ delay: 0.12 }}
             className="mt-5 max-w-lg text-lg text-teal-900/75"
           >
-            Upload a page from your textbook. Read it, listen to it, understand it, and test yourself.
+            Type a story or snap a textbook page. Read it, listen to it, understand it, and test yourself.
           </motion.p>
           <motion.div
             initial={{ opacity: 0, y: 12 }}

@@ -114,6 +114,12 @@ async def seed_demo_lessons(db: AsyncSession) -> None:
         )
         await svc.persist_content_tree(lesson, tree)
         await svc.ensure_audio(lesson, speed="slow")
+        try:
+            from app.services.story_illustrations import generate_lesson_illustrations
+
+            await generate_lesson_illustrations(db, lesson, prefer_gemini=False)
+        except Exception:
+            logger.exception("seed_illustrations_failed title=%s", demo["title"])
         logger.info("seeded_demo title=%s", demo["title"])
 
     await db.commit()

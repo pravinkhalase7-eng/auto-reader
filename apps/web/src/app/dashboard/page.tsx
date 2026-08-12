@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Flame, Timer, Trophy, Upload } from "lucide-react";
+import { BookPlus, Flame, Timer, Trophy } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { LessonCardView } from "@/components/lesson-card";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,7 @@ export default function DashboardPage() {
         </div>
         <Button asChild size="lg">
           <Link href="/upload">
-            <Upload className="h-4 w-4" /> Upload lesson
+            <BookPlus className="h-4 w-4" /> New story
           </Link>
         </Button>
       </div>
@@ -67,10 +67,18 @@ export default function DashboardPage() {
           <h2 className="font-display mb-4 text-2xl font-semibold text-teal-950">Subjects</h2>
           <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
             {data.subjects.map((s) => (
-              <Card key={s.name} className="bg-teal-50/60">
-                <p className="font-semibold text-teal-950">{s.name}</p>
-                <p className="text-sm text-teal-800/70">{s.count} lessons · {Math.round(s.avg_progress)}%</p>
-              </Card>
+              <Link
+                key={s.name}
+                href={`/lessons?subject=${encodeURIComponent(s.name)}`}
+                className="block rounded-[1.5rem] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+              >
+                <Card className="h-full bg-teal-50/60 transition hover:-translate-y-0.5 hover:shadow-lg">
+                  <p className="font-semibold text-teal-950">{s.name}</p>
+                  <p className="text-sm text-teal-800/70">
+                    {s.count} lessons · {Math.round(s.avg_progress)}%
+                  </p>
+                </Card>
+              </Link>
             ))}
           </div>
         </section>

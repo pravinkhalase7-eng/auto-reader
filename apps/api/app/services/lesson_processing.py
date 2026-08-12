@@ -206,36 +206,52 @@ class LessonProcessingService:
             }
             await self._set_job(job, step="uploaded", progress=10)
 
-            await self._set_job(job, step="preprocessing", progress=20)
-            page_texts: list[str] = []
-            for page in sorted(lesson.pages, key=lambda p: p.page_number):
-                original = await self.storage.open_path(page.original_storage_key)
-                processed_key = f"processed/{lesson.id}/page_{page.page_number}.png"
-                processed_path = await self.storage.open_path(processed_key)
-                w, h = self.preprocess.process_file(original, processed_path)
-                page.processed_storage_key = processed_key
-                page.width, page.height = w, h
+            from app.utils.ocr_clean import clean_ocr_text, merge_page_texts
 
-                await self._set_job(job, step="ocr", progress=35 + page.page_number)
-                ocr = await self.ocr.extract_text(processed_path)
-                page.ocr_raw_text = ocr.text
-                page_texts.append(ocr.text.strip())
+            pages = sorted(lesson.pages, key=lambda p: p.page_number)
+            typed_story = bool((lesson.original_text or "").strip()) and not pages
 
-            merged = "\n\n".join(t for t in page_texts if t)
-            if not merged.strip():
-                raise AppError(FRIENDLY_MESSAGES["EMPTY_CONTENT"], code="EMPTY_CONTENT")
+            if pages:
+                await self._set_job(job, step="preprocessing", progress=20)
+                page_texts: list[str] = []
+                for page in pages:
+                    original = await self.storage.open_path(page.original_storage_key)
+                    processed_key = f"processed/{lesson.id}/page_{page.page_number}.png"
+                    processed_path = await self.storage.open_path(processed_key)
+                    w, h = self.preprocess.process_file(original, processed_path)
+                    page.processed_storage_key = processed_key
+                    page.width, page.height = w, h
 
-            lesson.original_text = merged
+                    await self._set_job(job, step="ocr", progress=35 + page.page_number)
+                    ocr = await self.ocr.extract_text(processed_path)
+                    page.ocr_raw_text = ocr.text
+                    page_texts.append(ocr.text.strip())
+
+                merged = merge_page_texts([clean_ocr_text(t) for t in page_texts])
+                if not merged.strip():
+                    raise AppError(FRIENDLY_MESSAGES["EMPTY_CONTENT"], code="EMPTY_CONTENT")
+                lesson.original_text = merged
+            else:
+                merged = (lesson.original_text or "").strip()
+                if not merged:
+                    raise AppError(FRIENDLY_MESSAGES["EMPTY_STORY_TEXT"], code="EMPTY_STORY_TEXT")
 
             await self._set_job(job, step="understanding", progress=55)
             structured = await self.ai.structure_content(merged)
+            if typed_story:
+                cleaned_body = merged
+            else:
+                cleaned_body = clean_ocr_text(structured.cleaned_text or merged)
 
             await self._set_job(job, step="language", progress=65)
             await self._set_job(job, step="preparing_lesson", progress=75)
 
+            chosen_title = structured.title
+            if typed_story and lesson.title and lesson.title.strip() and lesson.title != "New Lesson":
+                chosen_title = lesson.title.strip()
             tree = reconstruct_from_text(
-                structured.cleaned_text,
-                title=structured.title,
+                cleaned_body,
+                title=chosen_title,
                 language=structured.language,
                 content_type=structured.content_type,
                 summary=structured.summary,
@@ -313,7 +329,7 @@ class LessonProcessingService:
             storage_key="",
             language=lesson.language,
             voice=tts_result.voice,
-            speed={"very_slow": 0.7, "slow": 0.85, "normal": 1.0}.get(speed, 0.85),
+            speed={"very_slow": 0.7, "slow": 0.85, "normal": 1.0, "fast": 1.2}.get(speed, 1.0),
             duration_ms=tts_result.duration_ms,
             provider=tts_result.provider,
         )
@@ -345,7 +361,7 @@ class LessonProcessingService:
         edited_text = clean_ocr_text(edited_text)
         structured = await self.ai.structure_content(edited_text, language_hint=lesson.language)
         tree = reconstruct_from_text(
-            structured.cleaned_text,
+            clean_ocr_text(structured.cleaned_text or edited_text),
             title=title or structured.title or lesson.title,
             language=structured.language,
             content_type=structured.content_type,

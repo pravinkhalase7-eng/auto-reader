@@ -5,6 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from sqlalchemy import text
+
 from app.api.v1 import api_router
 from app.core.base import Base
 from app.core.config import get_settings
@@ -21,6 +23,10 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
+        if "sqlite" in settings.database_url:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=30000"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL"))
         await conn.run_sync(Base.metadata.create_all)
         await apply_schema_patches(conn)
     if settings.seed_on_startup:

@@ -1,17 +1,45 @@
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event, text
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import text
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    future=True,
-)
+
+def _engine_kwargs() -> dict:
+    kwargs: dict = {"echo": False, "future": True}
+    if "sqlite" in settings.database_url:
+        kwargs["connect_args"] = {"timeout": 30, "check_same_thread": False}
+        kwargs["poolclass"] = NullPool
+    return kwargs
+
+
+engine = create_async_engine(settings.database_url, **_engine_kwargs())
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _sqlite_on_connect(dbapi_connection, _connection_record) -> None:
+    if "sqlite" not in settings.database_url:
+        return
+    raw = dbapi_connection
+    for attr in ("_connection", "driver_connection", "_conn"):
+        inner = getattr(raw, attr, None)
+        if inner is not None:
+            raw = inner
+    sqlite_conn = getattr(raw, "_conn", raw)
+    try:
+        sqlite_conn.execute("PRAGMA journal_mode=WAL")
+        sqlite_conn.execute("PRAGMA busy_timeout=30000")
+        sqlite_conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
+
 
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

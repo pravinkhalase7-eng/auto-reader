@@ -47,6 +47,14 @@ export type LessonContent = {
   sections: Section[];
 };
 
+export type StoryIllustration = {
+  id: string;
+  position: number;
+  caption: string;
+  storage_key: string;
+  provider: string;
+};
+
 export type WordTiming = { word_id: string; start_ms: number; end_ms: number };
 
 export type AudioAsset = {
@@ -130,6 +138,6 @@ export type Dashboard = {
 };
 
 export type ReadingMode = "listen" | "read" | "listen_read";
-export type SpeedOption = "very_slow" | "slow" | "normal";
-/** natural = fluent sentence speech; word = karaoke one-word-at-a-time */
-export type PlaybackStyle = "natural" | "word";
+export type SpeedOption = "very_slow" | "slow" | "normal" | "fast";
+/** natural = word highlight + pauses; word = karaoke; direct = fluent narration, no highlight */
+export type PlaybackStyle = "natural" | "word" | "direct";
