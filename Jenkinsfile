@@ -114,12 +114,12 @@ stage('Prepare Env') {
           if (!usedEnv) {
             sh '''
               echo "=== Looking for fallback env files ==="
-              ls -la niftysense.env .env /var/jenkins_home/niftysense.env /var/jenkins_home/secrets/niftysense.env 2>/dev/null || true
+              ls -la aiteacher.env .env /var/jenkins_home/aiteacher.env /var/jenkins_home/secrets/aiteacher.env 2>/dev/null || true
             '''
             def candidates = [
-              '/var/jenkins_home/secrets/niftysense.env',
-              '/var/jenkins_home/niftysense.env',
-              'niftysense.env',
+              '/var/jenkins_home/secrets/aiteacher.env',
+              '/var/jenkins_home/aiteacher.env',
+              'aiteacher.env',
               '.env',
             ]
             for (p in candidates) {
