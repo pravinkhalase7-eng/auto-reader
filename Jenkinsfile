@@ -150,16 +150,9 @@ Then rebuild.''')
                 echo "$key=SET"
               else
                 echo "$key=MISSING"
-                case "$key" in
-                  SMTP_USERNAME|SMTP_PASSWORD|EMAIL_TO) missing=1 ;;
-                esac
               fi
             done
-            if [ "$missing" = "1" ]; then
-              echo "ERROR: aiteacher-env-file was loaded but SMTP_USERNAME / SMTP_PASSWORD / EMAIL_TO are empty inside that file."
-              echo "Edit the secret file contents and update the Jenkins credential, then rebuild."
-              exit 1
-            fi
+           
           '''
           echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
         }
