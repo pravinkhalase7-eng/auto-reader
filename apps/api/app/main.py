@@ -1,0 +1,81 @@
+import uuid
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.v1 import api_router
+from app.core.base import Base
+from app.core.config import get_settings
+from app.core.database import AsyncSessionLocal, engine
+from app.core.exceptions import AppError
+from app.core.logging import request_id_ctx, setup_logging
+from app.core.security import TokenError
+import app.models  # noqa: F401 — register models
+
+settings = get_settings()
+setup_logging()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    if settings.seed_on_startup:
+        async with AsyncSessionLocal() as session:
+            from app.services.seed import seed_demo_lessons
+
+            await seed_demo_lessons(session)
+    yield
+    await engine.dispose()
+
+
+app = FastAPI(
+    title=settings.app_name,
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    rid = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request_id_ctx.set(rid)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(_: Request, exc: AppError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message, "code": exc.code, "request_id": request_id_ctx.get()},
+    )
+
+
+@app.exception_handler(TokenError)
+async def token_error_handler(_: Request, exc: TokenError):
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Please sign in to continue.", "code": "UNAUTHORIZED"},
+    )
+
+
+app.include_router(api_router, prefix=settings.api_prefix)
+
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to AI Teacher API", "docs": "/docs"}
