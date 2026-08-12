@@ -86,44 +86,42 @@ pipeline {
       }
     }
 
-    stage('Prepare Env') {
+stage('Prepare Env') {
+      when {
+        expression { return !params.SKIP_DEPLOY }
+      }
       steps {
         script {
           def usedEnv = false
-          def credId = (params.ENV_CREDENTIAL_ID ?: 'aiteacher-env-file').trim()
 
-          // Credential lookup is OPTIONAL (default OFF) so missing secrets do not spam WARN/fail
-          if (params.USE_ENV_CREDENTIAL) {
-            withCredentials([file(credentialsId: credId, variable: 'ENV_FILE')]) {
+          // 1) Jenkins Secret file — ID must be exactly: aiteacher-env-file
+          try {
+            withCredentials([file(credentialsId: 'aiteacher-env-file', variable: 'ENV_FILE')]) {
               sh '''
                 echo "Secret file path bound: $ENV_FILE"
                 test -f "$ENV_FILE" || { echo "ERROR: credential file path missing"; exit 1; }
                 cp -f "$ENV_FILE" .env.deploy
-                echo "Copied credential file → .env.deploy"
+                echo "Copied aiteacher-env-file → .env.deploy"
               '''
               usedEnv = true
-              echo "Loaded Jenkins credential ID: ${credId}"
             }
-          } else {
-            echo "USE_ENV_CREDENTIAL=false — skipping Jenkins secret lookup (this is OK)."
+          } catch (err) {
+            echo "Could not load credential aiteacher-env-file: ${err}"
+            echo "Check: Manage Jenkins → Credentials → ID is exactly aiteacher-env-file (Secret file), scope Global, accessible to this job."
           }
 
+          // 2) Fallback: persistent / workspace files
           if (!usedEnv) {
             sh '''
-              echo "=== Looking for env files ==="
-              ls -la aiteacher.env.example aiteacher.env .env \
-                /var/jenkins_home/aiteacher.env /var/jenkins_home/secrets/aiteacher.env 2>/dev/null || true
+              echo "=== Looking for fallback env files ==="
+              ls -la niftysense.env .env /var/jenkins_home/niftysense.env /var/jenkins_home/secrets/niftysense.env 2>/dev/null || true
             '''
-            def candidates = []
-            if (params.USE_REPO_ENV_EXAMPLE) {
-              candidates.add('aiteacher.env.example')
-            }
-            candidates.addAll([
-              'aiteacher.env',
+            def candidates = [
+              '/var/jenkins_home/secrets/niftysense.env',
+              '/var/jenkins_home/niftysense.env',
+              'niftysense.env',
               '.env',
-              '/var/jenkins_home/secrets/aiteacher.env',
-              '/var/jenkins_home/aiteacher.env',
-            ])
+            ]
             for (p in candidates) {
               if (fileExists(p)) {
                 sh "cp -f '${p}' .env.deploy"
@@ -135,93 +133,40 @@ pipeline {
           }
 
           if (!usedEnv) {
-            sh '''
-              cat > .env.deploy <<'EOF'
-API_HOST_PORT=8000
-WEB_HOST_PORT=3000
-POSTGRES_USER=aiteacher
-POSTGRES_PASSWORD=aiteacher
-POSTGRES_DB=aiteacher
-DATABASE_URL=postgresql+asyncpg://aiteacher:aiteacher@postgres:5432/aiteacher
-SECRET_KEY=jenkins-auto-generated-change-me
-CORS_ORIGINS=http://187.127.138.86:3000
-NEXT_PUBLIC_API_URL=http://187.127.138.86:8000/api/v1
-AI_PROVIDER=local
-OCR_PROVIDER=local
-TTS_PROVIDER=browser
-STORAGE_PROVIDER=local
-SEED_ON_STARTUP=true
-OPENAI_API_KEY=
-GOOGLE_AI_API_KEY=
-EOF
-            '''
-            usedEnv = true
-            echo "Wrote built-in default .env.deploy with VPS IP 187.127.138.86"
-          }
-
-          // Always apply PUBLIC_API_URL when provided (default param has real IP)
-          if (params.PUBLIC_API_URL?.trim()) {
-            def url = params.PUBLIC_API_URL.trim()
-            def cors = ''
-            try {
-              def withoutPath = url.split('/api')[0]
-              def parts = withoutPath.tokenize(':')
-              if (parts.size() == 2) {
-                cors = "${withoutPath}:3000"
-              } else if (parts.size() >= 3) {
-                cors = "${parts[0]}:${parts[1]}:3000"
-              }
-            } catch (ignored) {
-              echo "Could not derive CORS from PUBLIC_API_URL; leaving CORS_ORIGINS unchanged"
-            }
-            sh """
-              if grep -q '^NEXT_PUBLIC_API_URL=' .env.deploy; then
-                sed -i.bak 's|^NEXT_PUBLIC_API_URL=.*|NEXT_PUBLIC_API_URL=${url}|' .env.deploy
-              else
-                echo 'NEXT_PUBLIC_API_URL=${url}' >> .env.deploy
-              fi
-              if [ -n '${cors}' ]; then
-                if grep -q '^CORS_ORIGINS=' .env.deploy; then
-                  sed -i.bak 's|^CORS_ORIGINS=.*|CORS_ORIGINS=${cors}|' .env.deploy
-                else
-                  echo 'CORS_ORIGINS=${cors}' >> .env.deploy
-                fi
-                echo "CORS_ORIGINS set to ${cors}"
-              fi
-              echo "PUBLIC_API_URL applied: ${url}"
-            """
+            error('''No env source found.
+Create Jenkins credential:
+  Kind: Secret file
+  ID: aiteacher-env-file
+  Scope: Global
+Then rebuild.''')
           }
 
           sh '''
             echo "=== .env.deploy key check (values hidden) ==="
             missing=0
-            for key in SECRET_KEY NEXT_PUBLIC_API_URL CORS_ORIGINS; do
+            for key in GOOGLE_API_KEY SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD EMAIL_FROM EMAIL_TO; do
               val=$(grep -E "^${key}=" .env.deploy | head -n1 | cut -d= -f2- || true)
               if [ -n "$val" ]; then
                 echo "$key=SET"
               else
                 echo "$key=MISSING"
-                missing=1
+                case "$key" in
+                  SMTP_USERNAME|SMTP_PASSWORD|EMAIL_TO) missing=1 ;;
+                esac
               fi
             done
-            api_url=$(grep -E "^NEXT_PUBLIC_API_URL=" .env.deploy | head -n1 | cut -d= -f2- || true)
-            echo "NEXT_PUBLIC_API_URL value: ${api_url}"
-            case "$api_url" in
-              *YOUR_VPS_IP*|*your_vps_ip*|*YOUR_DOMAIN*|*your_domain*)
-                echo "ERROR: NEXT_PUBLIC_API_URL still contains a placeholder hostname."
-                echo "Set PUBLIC_API_URL=http://187.127.138.86:8000/api/v1 and rebuild."
-                exit 1
-                ;;
-            esac
-            if [ "$missing" = "1" ] && [ "${SKIP_DEPLOY}" != "true" ]; then
-              echo "ERROR: env file is missing required keys (SECRET_KEY, NEXT_PUBLIC_API_URL, CORS_ORIGINS)."
+            if [ "$missing" = "1" ]; then
+              echo "ERROR: aiteacher-env-file was loaded but SMTP_USERNAME / SMTP_PASSWORD / EMAIL_TO are empty inside that file."
+              echo "Edit the secret file contents and update the Jenkins credential, then rebuild."
               exit 1
             fi
           '''
-            echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
+          echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
         }
       }
     }
+
+
 
     stage('Clean') {
       steps {
