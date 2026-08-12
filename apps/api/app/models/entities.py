@@ -164,6 +164,11 @@ class LessonWord(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     position: Mapped[int] = mapped_column(Integer, default=0)
 
     sentence: Mapped["LessonSentence"] = relationship(back_populates="words")
+    timings: Mapped[list["TTSWordTiming"]] = relationship(
+        back_populates="word",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class AudioAsset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -179,7 +184,10 @@ class AudioAsset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     lesson: Mapped["Lesson"] = relationship(back_populates="audio_assets", lazy="selectin")
     timings: Mapped[list["TTSWordTiming"]] = relationship(
-        back_populates="audio_asset", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="audio_asset",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
     )
 
 
@@ -196,6 +204,7 @@ class TTSWordTiming(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     end_ms: Mapped[int] = mapped_column(Integer)
 
     audio_asset: Mapped["AudioAsset"] = relationship(back_populates="timings")
+    word: Mapped["LessonWord"] = relationship(back_populates="timings")
 
 
 class Quiz(Base, UUIDPrimaryKeyMixin, TimestampMixin):

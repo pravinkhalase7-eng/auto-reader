@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -51,45 +51,90 @@ class LessonProcessingService:
             job.finished_at = datetime.now(timezone.utc)
         await self.db.commit()
 
-    async def _clear_lesson_audio(self, lesson_id: str) -> None:
-        """Remove audio + timings before words are replaced (FK: tts_word_timings.word_id)."""
-        assets = list(
-            await self.db.scalars(
-                select(AudioAsset)
-                .where(AudioAsset.lesson_id == lesson_id)
-                .options(selectinload(AudioAsset.timings))
-            )
+    def _expunge_content_rows(self, *types: type) -> None:
+        for obj in list(self.db.identity_map.values()):
+            if isinstance(obj, types):
+                self.db.expunge(obj)
+
+    async def _wipe_lesson_tree(self, lesson_id: str) -> None:
+        """Delete timings first, then words. ORM cascade cannot see this FK."""
+        params = {"lesson_id": lesson_id}
+        await self.db.execute(
+            text(
+                """
+                DELETE FROM tts_word_timings
+                 WHERE word_id IN (
+                    SELECT lw.id FROM lesson_words lw
+                    JOIN lesson_sentences ls ON ls.id = lw.sentence_id
+                    JOIN lesson_paragraphs lp ON lp.id = ls.paragraph_id
+                    JOIN lesson_sections lsec ON lsec.id = lp.section_id
+                    WHERE lsec.lesson_id = :lesson_id
+                 )
+                    OR audio_asset_id IN (
+                    SELECT id FROM audio_assets WHERE lesson_id = :lesson_id
+                 )
+                """
+            ),
+            params,
         )
-        for asset in assets:
-            await self.db.delete(asset)
-        word_ids = (
-            select(LessonWord.id)
-            .join(LessonSentence, LessonWord.sentence_id == LessonSentence.id)
-            .join(LessonParagraph, LessonSentence.paragraph_id == LessonParagraph.id)
-            .join(LessonSection, LessonParagraph.section_id == LessonSection.id)
-            .where(LessonSection.lesson_id == lesson_id)
+        await self.db.execute(
+            text("DELETE FROM audio_assets WHERE lesson_id = :lesson_id"),
+            params,
         )
-        await self.db.execute(delete(TTSWordTiming).where(TTSWordTiming.word_id.in_(word_ids)))
+        await self.db.execute(
+            text(
+                """
+                DELETE FROM lesson_words
+                 WHERE sentence_id IN (
+                    SELECT ls.id FROM lesson_sentences ls
+                    JOIN lesson_paragraphs lp ON lp.id = ls.paragraph_id
+                    JOIN lesson_sections lsec ON lsec.id = lp.section_id
+                    WHERE lsec.lesson_id = :lesson_id
+                 )
+                """
+            ),
+            params,
+        )
+        await self.db.execute(
+            text(
+                """
+                DELETE FROM lesson_sentences
+                 WHERE paragraph_id IN (
+                    SELECT lp.id FROM lesson_paragraphs lp
+                    JOIN lesson_sections lsec ON lsec.id = lp.section_id
+                    WHERE lsec.lesson_id = :lesson_id
+                 )
+                """
+            ),
+            params,
+        )
+        await self.db.execute(
+            text(
+                """
+                DELETE FROM lesson_paragraphs
+                 WHERE section_id IN (
+                    SELECT id FROM lesson_sections WHERE lesson_id = :lesson_id
+                 )
+                """
+            ),
+            params,
+        )
+        await self.db.execute(
+            text("DELETE FROM lesson_sections WHERE lesson_id = :lesson_id"),
+            params,
+        )
         await self.db.flush()
+        self._expunge_content_rows(
+            TTSWordTiming,
+            AudioAsset,
+            LessonWord,
+            LessonSentence,
+            LessonParagraph,
+            LessonSection,
+        )
 
     async def persist_content_tree(self, lesson: Lesson, tree: ContentTree) -> None:
-        await self._clear_lesson_audio(lesson.id)
-        # Clear existing structure (async-safe eager load + ORM delete for cascades)
-        loaded = await self.db.scalar(
-            select(Lesson)
-            .where(Lesson.id == lesson.id)
-            .options(
-                selectinload(Lesson.sections)
-                .selectinload(LessonSection.paragraphs)
-                .selectinload(LessonParagraph.sentences)
-                .selectinload(LessonSentence.words)
-            )
-        )
-        if loaded:
-            for section in list(loaded.sections):
-                await self.db.delete(section)
-            await self.db.flush()
-            lesson.sections = []
+        await self._wipe_lesson_tree(lesson.id)
 
         lesson.title = tree.title
         lesson.language = tree.language
@@ -213,7 +258,21 @@ class LessonProcessingService:
             _ = exc
 
     async def ensure_audio(self, lesson: Lesson, speed: str = "slow") -> AudioAsset:
-        await self._clear_lesson_audio(lesson.id)
+        params = {"lesson_id": lesson.id}
+        await self.db.execute(
+            text(
+                """
+                DELETE FROM tts_word_timings
+                 WHERE audio_asset_id IN (
+                    SELECT id FROM audio_assets WHERE lesson_id = :lesson_id
+                 )
+                """
+            ),
+            params,
+        )
+        await self.db.execute(text("DELETE FROM audio_assets WHERE lesson_id = :lesson_id"), params)
+        await self.db.flush()
+        self._expunge_content_rows(TTSWordTiming, AudioAsset)
         # Query words directly to avoid stale identity-map collections
         sections = list(
             await self.db.scalars(
