@@ -1,56 +1,96 @@
+# Production / VPS docker-compose for AI Teacher
+# Used by Jenkinsfile (same pattern as Option-Trading / NiftySense).
+
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: aiteacher-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: aiteacher
-      POSTGRES_PASSWORD: aiteacher
-      POSTGRES_DB: aiteacher
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-aiteacher}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiteacher}
+      POSTGRES_DB: ${POSTGRES_DB:-aiteacher}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - aiteacher_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aiteacher"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiteacher} -d ${POSTGRES_DB:-aiteacher}"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
+    networks:
+      - aiteacher
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    container_name: aiteacher-redis
+    restart: unless-stopped
+    profiles: ["redis"]
+    networks:
+      - aiteacher
 
   api:
-    build: ./apps/api
-    ports:
-      - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://aiteacher:aiteacher@postgres:5432/aiteacher
-      SECRET_KEY: change-me-in-production
-      CORS_ORIGINS: http://localhost:3000
-      AI_PROVIDER: local
-      OCR_PROVIDER: local
-      TTS_PROVIDER: browser
-      STORAGE_PROVIDER: local
-      SEED_ON_STARTUP: "true"
-    volumes:
-      - api_storage:/app/storage
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    image: aiteacher-api:${IMAGE_TAG:-latest}
+    container_name: aiteacher-api
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://aiteacher:aiteacher@postgres:5432/aiteacher}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      OCR_PROVIDER: ${OCR_PROVIDER:-local}
+      TTS_PROVIDER: ${TTS_PROVIDER:-browser}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+    volumes:
+      - aiteacher_storage:/app/storage
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 35s
+    networks:
+      - aiteacher
 
   web:
     build:
       context: ./apps/web
+      dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+    image: aiteacher-web:${IMAGE_TAG:-latest}
+    container_name: aiteacher-web
+    restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_HOST_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      # Browser calls this URL — must be reachable from the user's machine/VPS public host
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+    networks:
+      - aiteacher
 
 volumes:
-  pgdata:
-  api_storage:
+  aiteacher_pgdata:
+  aiteacher_storage:
+
+networks:
+  aiteacher:
+    name: aiteacher_net

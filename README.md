@@ -145,13 +145,21 @@ Critical coverage: auth, segmentation, language detection, word timing fallback,
 
 ## Production deployment notes
 
-1. Set strong `SECRET_KEY`, disable default demo seed (`SEED_ON_STARTUP=false`).
-2. Use managed Postgres (`DATABASE_URL=postgresql+asyncpg://...`).
-3. Set `STORAGE_PROVIDER=s3` and wire boto3 + signed URLs.
-4. Set `AI_PROVIDER=gemini` or `openai` with keys; prefer OCR/TTS cloud providers for quality.
+See **[docs/deploy.md](docs/deploy.md)** for the Jenkins + VPS flow (same pattern as Option-Trading).
+
+Quick summary:
+
+1. Create Jenkins credential Secret file ID: `aiteacher-env-file` (from `aiteacher.env.example`)
+2. Pipeline uses root `Jenkinsfile` → builds API/Web images → `docker compose up -d`
+3. UI on port **3000**, API on **8000**
+
+1. Set strong `SECRET_KEY`, disable default demo seed (`SEED_ON_STARTUP=false`) for real production if desired.
+2. Use managed Postgres or the compose `postgres` service (`DATABASE_URL=postgresql+asyncpg://...@postgres:5432/...`).
+3. Set `STORAGE_PROVIDER=s3` and wire boto3 + signed URLs when ready.
+4. Set `AI_PROVIDER=gemini` or `openai` with keys; prefer cloud OCR/TTS for quality.
 5. Put API behind HTTPS; configure `CORS_ORIGINS` to your web origin only.
 6. Replace in-process `TaskQueue` with Celery/SQS/Cloud Tasks when load requires it.
-7. Build web with `NEXT_PUBLIC_API_URL` pointing at the public API.
+7. Build web with `NEXT_PUBLIC_API_URL` pointing at the public API (Jenkins does this each deploy).
 
 ---
 
