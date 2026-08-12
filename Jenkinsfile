@@ -212,8 +212,18 @@ EOF
                 missing=1
               fi
             done
+            api_url=$(grep -E "^NEXT_PUBLIC_API_URL=" .env.deploy | head -n1 | cut -d= -f2- || true)
+            echo "NEXT_PUBLIC_API_URL value: ${api_url}"
+            case "$api_url" in
+              *YOUR_VPS_IP*|*your_vps_ip*|*YOUR_DOMAIN*|*your_domain*)
+                echo "ERROR: NEXT_PUBLIC_API_URL still contains a placeholder hostname."
+                echo "Set Jenkins param PUBLIC_API_URL=http://YOUR_REAL_IP:8000/api/v1 and rebuild."
+                echo "Example: PUBLIC_API_URL=http://187.127.138.86:8000/api/v1"
+                exit 1
+                ;;
+            esac
             if [ "$missing" = "1" ] && [ "${SKIP_DEPLOY}" != "true" ]; then
-              echo "ERROR: aiteacher-env-file is missing required keys (SECRET_KEY, NEXT_PUBLIC_API_URL, CORS_ORIGINS)."
+              echo "ERROR: env file is missing required keys (SECRET_KEY, NEXT_PUBLIC_API_URL, CORS_ORIGINS)."
               exit 1
             fi
           '''
