@@ -164,11 +164,23 @@ EOF
           // Optional parameter override for public API URL (browser-facing)
           if (params.PUBLIC_API_URL?.trim()) {
             def url = params.PUBLIC_API_URL.trim()
-            // Derive UI origin for CORS when API looks like http://host:8000/api/v1
+            // Derive UI origin for CORS: http://host:8000/api/v1 -> http://host:3000
             def cors = ''
-            def m = (url =~ /^(https?:\/\/[^:/]+)(?::8000)?(?:\/.*)?$/)
-            if (m.find()) {
-              cors = "${m.group(1)}:3000"
+            try {
+              def withoutPath = url.split('/api')[0]  // http://host:8000
+              def parts = withoutPath.tokenize(':')
+              if (parts.size() >= 2) {
+                // http + //host  OR http + //host + port
+                if (parts.size() == 2) {
+                  // http://host  (no port)
+                  cors = "${withoutPath}:3000"
+                } else {
+                  // http://host:8000 -> http://host:3000
+                  cors = "${parts[0]}:${parts[1]}:3000"
+                }
+              }
+            } catch (ignored) {
+              echo "Could not derive CORS from PUBLIC_API_URL; leaving CORS_ORIGINS unchanged"
             }
             sh """
               if grep -q '^NEXT_PUBLIC_API_URL=' .env.deploy; then
