@@ -148,25 +148,21 @@ Then rebuild.''')
 
           sh '''
             set -e
-            # Windows CRLF / BOM from an uploaded Notepad file
             tr -d '\\r' < .env.deploy | sed '1s/^\\xEF\\xBB\\xBF//' > .env.deploy.normalized
             mv .env.deploy.normalized .env.deploy
+
+            if command -v python3 >/dev/null 2>&1; then
+              python3 scripts/normalize_deploy_env.py .env.deploy
+            else
+              echo "WARN: python3 not on agent — quoting POSTGRES_PASSWORD inline"
+              if grep -qE '^[[:space:]]*POSTGRES_PASSWORD[[:space:]]*=' .env.deploy; then
+                sed -i.bak -E "s|^[[:space:]]*POSTGRES_PASSWORD[[:space:]]*=([^'\"].*)$|POSTGRES_PASSWORD='\\1'|" .env.deploy
+              fi
+            fi
 
             env_val() {
               grep -E "^[[:space:]]*${1}[[:space:]]*=" .env.deploy 2>/dev/null | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'\'']//;s/["'\'']$//' || true
             }
-
-            # This app reads GOOGLE_AI_API_KEY. If the secret file used GOOGLE_API_KEY, copy it.
-            ai_key="$(env_val GOOGLE_AI_API_KEY)"
-            google_key="$(env_val GOOGLE_API_KEY)"
-            if [ -z "$ai_key" ] && [ -n "$google_key" ]; then
-              echo "Mapping GOOGLE_API_KEY → GOOGLE_AI_API_KEY"
-              if grep -qE '^[[:space:]]*GOOGLE_AI_API_KEY[[:space:]]*=' .env.deploy; then
-                sed -i.bak "s|^[[:space:]]*GOOGLE_AI_API_KEY[[:space:]]*=.*|GOOGLE_AI_API_KEY=${google_key}|" .env.deploy
-              else
-                echo "GOOGLE_AI_API_KEY=${google_key}" >> .env.deploy
-              fi
-            fi
 
             if [ -n "${PUBLIC_API_URL}" ]; then
               if grep -qE '^[[:space:]]*NEXT_PUBLIC_API_URL[[:space:]]*=' .env.deploy; then
@@ -175,28 +171,14 @@ Then rebuild.''')
                 echo "NEXT_PUBLIC_API_URL=${PUBLIC_API_URL}" >> .env.deploy
               fi
               echo "PUBLIC_API_URL applied: ${PUBLIC_API_URL}"
-            fi
-
-            # Keep DATABASE_URL in lockstep with POSTGRES_* (Postgres ignores a new
-            # POSTGRES_PASSWORD if the data volume already exists).
-            pg_user="$(env_val POSTGRES_USER)"; pg_user="${pg_user:-aiteacher}"
-            pg_pass="$(env_val POSTGRES_PASSWORD)"
-            pg_db="$(env_val POSTGRES_DB)"; pg_db="${pg_db:-aiteacher}"
-            if [ -n "$pg_pass" ]; then
               if command -v python3 >/dev/null 2>&1; then
-                encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$pg_pass")
-              else
-                encoded="$pg_pass"
+                python3 scripts/normalize_deploy_env.py .env.deploy
               fi
-              grep -vE '^[[:space:]]*DATABASE_URL[[:space:]]*=' .env.deploy > .env.deploy.tmp
-              echo "DATABASE_URL=postgresql+asyncpg://${pg_user}:${encoded}@postgres:5432/${pg_db}" >> .env.deploy.tmp
-              mv .env.deploy.tmp .env.deploy
-              echo "DATABASE_URL synced to POSTGRES_USER/PASSWORD/DB"
             fi
 
             echo "=== .env.deploy key check (values hidden) ==="
             missing=0
-            for key in SECRET_KEY DATABASE_URL NEXT_PUBLIC_API_URL CORS_ORIGINS GOOGLE_AI_API_KEY; do
+            for key in SECRET_KEY DATABASE_URL NEXT_PUBLIC_API_URL CORS_ORIGINS POSTGRES_PASSWORD GOOGLE_AI_API_KEY; do
               val="$(env_val "$key")"
               if [ -n "$val" ]; then
                 echo "$key=SET"
@@ -310,7 +292,7 @@ Then rebuild.''')
           . ./.env
           set +a
 
-          echo "Runtime check: SECRET_KEY=${SECRET_KEY:+SET} NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}"
+          echo "Runtime check: SECRET_KEY=${SECRET_KEY:+SET} NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} POSTGRES_PASSWORD=${POSTGRES_PASSWORD:+SET len=${#POSTGRES_PASSWORD}}"
 
           echo "Freeing previous AI Teacher containers (if any)..."
           docker compose -f docker-compose.yml down --remove-orphans || true
@@ -328,8 +310,44 @@ Then rebuild.''')
           free_port "${API_HOST_PORT}"
           free_port "${WEB_HOST_PORT}"
 
-          echo "Starting stack from the images just built (no compose rebuild)..."
-          docker compose -f docker-compose.yml up -d --no-build --force-recreate
+          echo "Starting Postgres first..."
+          docker compose -f docker-compose.yml up -d --no-build postgres
+
+          echo "Waiting for Postgres..."
+          PG_USER="${POSTGRES_USER:-aiteacher}"
+          ready=0
+          for i in $(seq 1 30); do
+            if docker exec aiteacher-postgres pg_isready -U "$PG_USER" >/dev/null 2>&1; then
+              echo "Postgres ready"
+              ready=1
+              break
+            fi
+            echo "attempt ${i}: postgres starting"
+            sleep 2
+          done
+          if [ "$ready" != "1" ]; then
+            echo "Postgres did not become ready"
+            docker compose -f docker-compose.yml logs postgres --tail=80
+            exit 1
+          fi
+
+          # Existing volumes keep the first-boot password. Reset the role to match .env
+          # using peer auth inside the container (no password needed).
+          env_val() {
+            grep -E "^[[:space:]]*${1}[[:space:]]*=" .env 2>/dev/null | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'\'']//;s/["'\'']$//' || true
+          }
+          PG_PASS="$(env_val POSTGRES_PASSWORD)"
+          PG_DB="$(env_val POSTGRES_DB)"; PG_DB="${PG_DB:-aiteacher}"
+          if [ -n "$PG_PASS" ]; then
+            echo "Syncing Postgres role password to env file (length=${#PG_PASS})"
+            SQL_PASS=$(printf "%s" "$PG_PASS" | sed "s/'/''/g")
+            docker exec -u postgres aiteacher-postgres \
+              psql -d postgres -v ON_ERROR_STOP=1 \
+              -c "ALTER USER \"${PG_USER}\" WITH PASSWORD '${SQL_PASS}';"
+          fi
+
+          echo "Starting API and web from the images just built..."
+          docker compose -f docker-compose.yml up -d --no-build --force-recreate api web
 
           echo "Waiting for API healthy (via docker exec — works with Jenkins-in-Docker)..."
           for i in $(seq 1 45); do
