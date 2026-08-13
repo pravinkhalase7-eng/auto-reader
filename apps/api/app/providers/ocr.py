@@ -95,7 +95,7 @@ def _tess_lang_string(language_hint: str | None = None) -> str:
     return "+".join(seen)
 
 
-def _text_from_tesseract_data(data: dict, min_conf: int = 55) -> tuple[str, float]:
+def _text_from_tesseract_data(data: dict, min_conf: int = 25) -> tuple[str, float]:
     """Rebuild text from confident words only, preserving line breaks."""
     n = len(data.get("text") or [])
     lines: list[str] = []
@@ -128,6 +128,31 @@ def _text_from_tesseract_data(data: dict, min_conf: int = 55) -> tuple[str, floa
     return text, avg
 
 
+def _prepare_ocr_image(image):
+    """Sharpen phone photos so small Hindi words are not dropped."""
+    from PIL import ImageEnhance, ImageOps
+
+    img = image.convert("RGB")
+    width, height = img.size
+    shortest = min(width, height)
+    if shortest < 1400:
+        scale = 1400 / shortest
+        img = img.resize((int(width * scale), int(height * scale)))
+    img = ImageOps.autocontrast(img)
+    img = ImageEnhance.Contrast(img).enhance(1.15)
+    img = ImageEnhance.Sharpness(img).enhance(1.2)
+    return img
+
+
+def _pick_richer_ocr(data_text: str, full_text: str) -> str:
+    def score(text: str) -> int:
+        return sum(1 for c in text if c.isalpha() or "\u0900" <= c <= "\u097F")
+
+    if score(full_text) > score(data_text) * 1.08:
+        return full_text
+    return data_text or full_text
+
+
 class LocalOCRProvider(OCRProvider):
     """Extract text from uploaded images via Tesseract. Never invents demo stories."""
 
@@ -155,15 +180,18 @@ class LocalOCRProvider(OCRProvider):
 
         try:
             lang = _tess_lang_string(language_hint)
-            image = Image.open(image_path)
-            config = "--oem 3 --psm 4 -c preserve_interword_spaces=1"
+            image = _prepare_ocr_image(Image.open(image_path))
+            config = "--oem 3 --psm 6 -c preserve_interword_spaces=1"
+            min_conf = 20 if "hin" in lang or "mar" in lang else 40
             data = pytesseract.image_to_data(
                 image,
                 lang=lang,
                 config=config,
                 output_type=pytesseract.Output.DICT,
             )
-            text, avg_conf = _text_from_tesseract_data(data)
+            text_data, avg_conf = _text_from_tesseract_data(data, min_conf=min_conf)
+            text_full = pytesseract.image_to_string(image, lang=lang, config=config)
+            text = _pick_richer_ocr(text_data, text_full)
             cleaned = clean_ocr_text(text)
             logger.info(
                 "ocr_complete path=%s lang=%s chars=%s conf=%.2f",

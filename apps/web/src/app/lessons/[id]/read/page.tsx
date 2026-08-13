@@ -77,7 +77,7 @@ export default function ReadPage() {
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[1.5fr_0.9fr]">
-        <Card className="flex max-h-[70vh] min-h-[28rem] flex-col overflow-hidden p-6 md:p-8">
+        <Card className="flex min-h-0 flex-1 flex-col overflow-visible p-4 md:p-8 lg:max-h-[70vh] lg:overflow-hidden">
           {content ? (
             <LessonViewer
               content={content}

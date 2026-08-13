@@ -22,7 +22,7 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
   const { user, logout } = useAuthStore();
 
   return (
-    <div className={cn(compact ? "flex h-dvh flex-col overflow-hidden" : "min-h-screen")}>
+    <div className={cn(compact ? "flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden" : "min-h-screen")}>
       <header className={cn("z-40 border-b border-teal-900/10 bg-[#f3f7f4]/90 backdrop-blur-md", compact ? "shrink-0" : "sticky top-0")}>
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
           <Link href="/dashboard" className="font-display text-xl font-bold tracking-tight text-teal-950">
@@ -58,7 +58,7 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
             </Button>
           </div>
         </div>
-        <nav className="flex justify-around border-t border-teal-900/5 px-2 py-2 md:hidden" aria-label="Mobile">
+        <nav className="flex justify-around gap-0 overflow-x-auto border-t border-teal-900/5 px-1 py-1.5 md:hidden" aria-label="Mobile">
           {links.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
@@ -74,7 +74,16 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
           ))}
         </nav>
       </header>
-      <main className={cn("mx-auto w-full px-3 md:px-4", compact ? "max-w-7xl min-h-0 overflow-hidden py-3 md:py-4" : "max-w-6xl py-6 md:py-10")}>{children}</main>
+      <main
+        className={cn(
+          "mx-auto w-full px-3 md:px-4",
+          compact
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+            : "max-w-6xl py-6 md:py-10",
+        )}
+      >
+        {compact ? <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col">{children}</div> : children}
+      </main>
     </div>
   );
 }

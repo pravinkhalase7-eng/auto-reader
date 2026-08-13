@@ -26,8 +26,8 @@ pipeline {
     )
     booleanParam(
       name: 'RESET_POSTGRES',
-      defaultValue: true,
-      description: 'Delete Postgres data so the password in the env file is used. Leave ON until login works. Wipes lessons in the DB.'
+      defaultValue: false,
+      description: 'Delete Postgres data (users, lessons, reminders). Leave OFF so accounts survive deploys. Turn ON only if you need a fresh empty database.'
     )
     string(
       name: 'PUBLIC_API_URL',
@@ -175,13 +175,20 @@ Then rebuild.''')
             docker rmi -f aiteacher-api:latest aiteacher-web:latest 2>/dev/null || true
             echo "=== Remaining aiteacher images ==="
             docker images | grep aiteacher || echo none
-            echo "=== Docker volumes before Postgres reset ==="
-            docker volume ls
-            echo "Deleting Postgres volumes so POSTGRES_PASSWORD from .env is used"
-            docker volume rm -f aiteacher_pgdata aiteacher_aiteacher_pgdata 2>/dev/null || true
-            echo "=== Docker volumes after Postgres reset ==="
+            echo "=== Docker volumes ==="
             docker volume ls
           '''
+          if (params.RESET_POSTGRES) {
+            sh '''
+              set +e
+              echo "RESET_POSTGRES=true — deleting Postgres volume (this wipes users and lessons)"
+              docker volume rm -f aiteacher_pgdata aiteacher_aiteacher_pgdata 2>/dev/null || true
+              echo "=== Docker volumes after Postgres reset ==="
+              docker volume ls
+            '''
+          } else {
+            echo "Keeping Postgres volume aiteacher_pgdata so users and lessons survive this deploy"
+          }
         }
       }
     }

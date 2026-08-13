@@ -179,14 +179,14 @@ export function LessonViewer({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex min-h-0 flex-col lg:h-full">
       {sceneUrl ? (
-        <figure className="relative mb-4 flex max-h-72 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-teal-900/10 bg-teal-50 md:max-h-80">
+        <figure className="relative mb-4 hidden max-h-40 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-teal-900/10 bg-teal-50 sm:flex md:max-h-72 lg:max-h-80">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={sceneUrl}
             alt=""
-            className="max-h-72 w-full object-contain object-center md:max-h-80"
+            className="max-h-40 w-full object-contain object-center md:max-h-72 lg:max-h-80"
           />
           <Button
             size="sm"
@@ -202,7 +202,7 @@ export function LessonViewer({
         </figure>
       ) : null}
 
-      <div ref={scrollPane} data-lesson-scroll className="min-h-0 flex-1 overflow-y-auto pr-1">
+      <div ref={scrollPane} data-lesson-scroll className="min-h-0 flex-1 overflow-y-visible lg:overflow-y-auto pr-1">
         <p className="mb-3 text-xs text-teal-800/70">
           Hover a word, or click it, to hear how it sounds.
         </p>

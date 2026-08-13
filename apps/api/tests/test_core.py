@@ -123,6 +123,7 @@ def test_ocr_clean_keeps_devanagari():
 
     text = "एक दिन जंगल में एक शेर सो रहा था।"
     assert "शेर" in clean_ocr_text(text)
+    assert "जो" in clean_ocr_text("उसे जो चाहिए होता उसे लेने के लिए जाती")
 
 
 def test_merge_page_texts_stitches_mid_sentence_breaks():

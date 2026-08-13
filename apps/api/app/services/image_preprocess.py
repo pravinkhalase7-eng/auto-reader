@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageOps
 
 
 def _drop_bright_chroma(rgb: Image.Image) -> Image.Image:
@@ -12,8 +12,8 @@ def _drop_bright_chroma(rgb: Image.Image) -> Image.Image:
     cb_dev = ImageChops.difference(cb, Image.new("L", cb.size, 128))
     cr_dev = ImageChops.difference(cr, Image.new("L", cr.size, 128))
     chroma = ImageChops.add(cb_dev, cr_dev)
-    colorful = chroma.point(lambda p: 255 if p > 16 else 0)
-    dark_ink = y.point(lambda p: 255 if p < 95 else 0)
+    dark_ink = y.point(lambda p: 255 if p < 170 else 0)
+    colorful = chroma.point(lambda p: 255 if p > 28 else 0)
     not_ink = ImageChops.invert(dark_ink)
     mask = ImageChops.multiply(colorful, not_ink)
     return Image.composite(Image.new("L", y.size, 255), y, mask)
@@ -37,8 +37,7 @@ class ImagePreprocessService:
             img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
         gray = _drop_bright_chroma(img)
-        gray = ImageOps.autocontrast(gray, cutoff=2)
-        gray = gray.filter(ImageFilter.MedianFilter(size=3))
+        gray = ImageOps.autocontrast(gray, cutoff=1)
 
         buf = io.BytesIO()
         gray.save(buf, format="PNG", optimize=True)

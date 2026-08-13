@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus, LayoutDashboard } from "lucide-react";
 import { PaviAvatar } from "@/components/pavi/PaviAvatar";
@@ -11,7 +12,8 @@ import { ReminderCard } from "@/components/pavi/ReminderCard";
 import { AppointmentCard } from "@/components/pavi/AppointmentCard";
 import { getSpeechProvider, type MicState } from "@/lib/speech-providers";
 import { getAppointments, getConversations, getPreferences, getUpcomingReminders, sendChatMessage, sendVoiceTranscript } from "@/lib/pavi-api";
-import { ApiError } from "@/lib/api";
+import { ApiError, setToken } from "@/lib/api";
+import { useAuthStore } from "@/store/auth-store";
 
 const SUGGESTIONS = [
   "Create an appointment for 4pm",
@@ -27,6 +29,9 @@ function nid() {
 
 export function PaviAssistant() {
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const token = useAuthStore((s) => s.token);
+  const logout = useAuthStore((s) => s.logout);
   const speech = useMemo(() => getSpeechProvider(), []);
   const [input, setInput] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -34,15 +39,17 @@ export function PaviAssistant() {
   const [micState, setMicState] = useState<MicState>("idle");
   const [micError, setMicError] = useState<string | null>(null);
   const [interim, setInterim] = useState("");
+  const signedIn = Boolean(token);
 
-  const reminders = useQuery({ queryKey: ["pavi-reminders-upcoming"], queryFn: getUpcomingReminders });
-  const appointments = useQuery({ queryKey: ["pavi-appointments"], queryFn: getAppointments });
-  const conversations = useQuery({ queryKey: ["pavi-conversations"], queryFn: getConversations });
-  const prefs = useQuery({ queryKey: ["pavi-prefs"], queryFn: getPreferences });
+  const reminders = useQuery({ queryKey: ["pavi-reminders-upcoming"], queryFn: getUpcomingReminders, enabled: signedIn });
+  const appointments = useQuery({ queryKey: ["pavi-appointments"], queryFn: getAppointments, enabled: signedIn });
+  const conversations = useQuery({ queryKey: ["pavi-conversations"], queryFn: getConversations, enabled: signedIn });
+  const prefs = useQuery({ queryKey: ["pavi-prefs"], queryFn: getPreferences, enabled: signedIn });
   const needsPhone = Boolean(prefs.data && prefs.data.phone_call_enabled && !prefs.data.phone_number_masked);
 
   const chat = useMutation({
     mutationFn: async ({ text, voice }: { text: string; voice?: boolean }) => {
+      if (token) setToken(token);
       if (voice) return sendVoiceTranscript(text, conversationId);
       return sendChatMessage(text, conversationId);
     },
@@ -59,6 +66,13 @@ export function PaviAssistant() {
       queryClient.invalidateQueries({ queryKey: ["pavi-prefs"] });
     },
     onError: (err) => {
+      const unauthorized =
+        err instanceof ApiError && (err.code === "UNAUTHORIZED" || /sign in/i.test(err.message));
+      if (unauthorized) {
+        logout();
+        router.replace("/login?next=/pavi");
+        return;
+      }
       const msg = err instanceof ApiError ? err.message : "I couldn't save that reminder right now. Please try again.";
       setMessages((prev) => [...prev, { id: nid(), role: "assistant", content: msg }]);
     },
@@ -117,7 +131,7 @@ export function PaviAssistant() {
   const hasThread = messages.length > 0;
 
   return (
-    <div className="grid h-[calc(100dvh-7.5rem)] min-h-0 gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] lg:h-[calc(100dvh-6rem)]">
+    <div className="grid h-full min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px]">
       <section className="flex min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-white/70 bg-white/80 shadow-[0_20px_60px_-32px_rgba(15,80,70,0.45)] backdrop-blur-sm">
         <header className="flex shrink-0 items-center gap-3 border-b border-teal-900/6 px-4 py-3 md:px-5">
           <PaviAvatar listening={listening} speaking={chat.isPending} size="md" />

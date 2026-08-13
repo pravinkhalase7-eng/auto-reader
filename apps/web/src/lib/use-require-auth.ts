@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/auth-store";
+import { setToken } from "@/lib/api";
 
 export function useAuthHydrated() {
   const [hydrated, setHydrated] = useState(false);
@@ -20,6 +21,10 @@ export function useRequireAuth() {
   const pathname = usePathname();
   const token = useAuthStore((s) => s.token);
   const hydrated = useAuthHydrated();
+
+  useEffect(() => {
+    if (token) setToken(token);
+  }, [token]);
 
   useEffect(() => {
     if (!hydrated) return;

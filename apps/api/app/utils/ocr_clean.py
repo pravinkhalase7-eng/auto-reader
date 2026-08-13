@@ -32,15 +32,17 @@ def _clean_token(token: str) -> str | None:
         return None
     if GARBAGE_TOKEN.match(token):
         return None
+    # Keep every Hindi/Marathi word, including short ones like जो, न, व, कि
+    if re.search(r"[\u0900-\u097F]", token):
+        return token
     if len(token) == 1 and not LETTER.search(token) and token not in {".", ",", "?", "!", "।", ";", ":"}:
         return None
     latin = re.sub(r"[^A-Za-z]", "", token)
     if len(token) <= 2 and latin.lower() == token.lower() and token.lower() not in SHORT_LATIN:
-        if not re.search(r"[\u0900-\u097F]", token):
-            return None
-    if re.search(r"[A-Za-z\u0900-\u097F].*[\W_]|[\W_].*[A-Za-z\u0900-\u097F]", token):
-        if not re.match(r"^[A-Za-z\u0900-\u097F]+[-'][A-Za-z\u0900-\u097F]+[.,!?;:।]?$", token):
-            letters_only = re.sub(r"[^\w\u0900-\u097F]", "", token)
+        return None
+    if re.search(r"[A-Za-z].*[\W_]|[\W_].*[A-Za-z]", token):
+        if not re.match(r"^[A-Za-z]+[-'][A-Za-z]+[.,!?;:]?$", token):
+            letters_only = re.sub(r"[^\w]", "", token)
             if len(letters_only) < 3 and letters_only.lower() not in SHORT_LATIN:
                 return None
             token = letters_only or token

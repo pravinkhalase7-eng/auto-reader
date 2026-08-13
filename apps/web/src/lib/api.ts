@@ -1,10 +1,31 @@
 import { API_URL } from "@/lib/utils";
 
 const TOKEN_KEY = "ai_teacher_token";
+const AUTH_PERSIST_KEY = "ai-teacher-auth";
+
+function tokenFromPersist(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(AUTH_PERSIST_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { state?: { token?: unknown } };
+    const token = parsed?.state?.token;
+    return typeof token === "string" && token ? token : null;
+  } catch {
+    return null;
+  }
+}
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  const direct = localStorage.getItem(TOKEN_KEY);
+  if (direct) return direct;
+  const persisted = tokenFromPersist();
+  if (persisted) {
+    localStorage.setItem(TOKEN_KEY, persisted);
+    return persisted;
+  }
+  return null;
 }
 
 export function setToken(token: string) {
@@ -27,12 +48,13 @@ async function parseError(res: Response) {
   try {
     const data = await res.json();
     const detail = data.detail;
-    if (typeof detail === "string") throw new ApiError(detail, data.code);
-    if (detail?.detail) throw new ApiError(detail.detail, detail.code || data.code);
-    throw new ApiError("Something went wrong. Let's try again.");
+    const code = data.code || (res.status === 401 ? "UNAUTHORIZED" : undefined);
+    if (typeof detail === "string") throw new ApiError(detail, code);
+    if (detail?.detail) throw new ApiError(detail.detail, detail.code || code);
+    throw new ApiError(res.status === 401 ? "Please sign in to continue." : "Something went wrong. Let's try again.", code);
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    throw new ApiError("Something went wrong. Let's try again.");
+    throw new ApiError(res.status === 401 ? "Please sign in to continue." : "Something went wrong. Let's try again.", res.status === 401 ? "UNAUTHORIZED" : undefined);
   }
 }
 
