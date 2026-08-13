@@ -108,6 +108,14 @@ def main() -> int:
     if public_api:
         rows = upsert(rows, "NEXT_PUBLIC_API_URL", public_api)
         print("PUBLIC_API_URL applied")
+        data = env_map(rows)
+        webhook = (data.get("TWILIO_WEBHOOK_BASE_URL") or "").strip()
+        base = public_api.rstrip("/")
+        if base.endswith("/api/v1"):
+            base = base[: -len("/api/v1")]
+        if base and (not webhook or "localhost" in webhook or "127.0.0.1" in webhook):
+            rows = upsert(rows, "TWILIO_WEBHOOK_BASE_URL", base)
+            print(f"TWILIO_WEBHOOK_BASE_URL set to {base}")
 
     user = (data.get("POSTGRES_USER") or "aiteacher").strip() or "aiteacher"
     password = data.get("POSTGRES_PASSWORD") or ""

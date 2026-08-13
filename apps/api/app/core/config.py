@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""
     twilio_webhook_base_url: str = ""
+    next_public_api_url: str = ""
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     default_timezone: str = "Asia/Kolkata"
@@ -71,6 +72,18 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def resolved_twilio_webhook_base(self) -> str:
+        explicit = (self.twilio_webhook_base_url or "").strip().rstrip("/")
+        if explicit and "localhost" not in explicit and "127.0.0.1" not in explicit:
+            return explicit
+        public = (self.next_public_api_url or "").strip().rstrip("/")
+        if public.endswith("/api/v1"):
+            public = public[: -len("/api/v1")]
+        if public and "localhost" not in public and "127.0.0.1" not in public:
+            return public
+        return explicit or "http://localhost:8000"
 
     @property
     def resolved_gemini_api_key(self) -> str:

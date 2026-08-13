@@ -273,3 +273,22 @@ async def test_voice_transcript_and_twilio_webhook(pavi_client):
     assert "Pavi" in twiml.text
     status = await pavi_client.post("/api/v1/voice/twilio/status", data={"CallSid": "CA_TEST", "CallStatus": "completed"})
     assert status.status_code == 200
+
+
+def test_resolved_twilio_webhook_from_public_api():
+    from app.core.config import Settings
+
+    s = Settings.model_construct(
+        twilio_webhook_base_url="",
+        next_public_api_url="http://187.127.138.86:8000/api/v1",
+    )
+    assert s.resolved_twilio_webhook_base == "http://187.127.138.86:8000"
+
+    local = Settings.model_construct(twilio_webhook_base_url="", next_public_api_url="http://localhost:8000/api/v1")
+    assert local.resolved_twilio_webhook_base == "http://localhost:8000"
+
+    explicit = Settings.model_construct(
+        twilio_webhook_base_url="http://187.127.138.86:8000",
+        next_public_api_url="http://localhost:8000/api/v1",
+    )
+    assert explicit.resolved_twilio_webhook_base == "http://187.127.138.86:8000"

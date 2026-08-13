@@ -10,7 +10,7 @@ import { PaviInput } from "@/components/pavi/PaviInput";
 import { ReminderCard } from "@/components/pavi/ReminderCard";
 import { AppointmentCard } from "@/components/pavi/AppointmentCard";
 import { getSpeechProvider, type MicState } from "@/lib/speech-providers";
-import { getAppointments, getConversations, getUpcomingReminders, sendChatMessage, sendVoiceTranscript } from "@/lib/pavi-api";
+import { getAppointments, getConversations, getPreferences, getUpcomingReminders, sendChatMessage, sendVoiceTranscript } from "@/lib/pavi-api";
 import { ApiError } from "@/lib/api";
 
 const SUGGESTIONS = [
@@ -38,6 +38,8 @@ export function PaviAssistant() {
   const reminders = useQuery({ queryKey: ["pavi-reminders-upcoming"], queryFn: getUpcomingReminders });
   const appointments = useQuery({ queryKey: ["pavi-appointments"], queryFn: getAppointments });
   const conversations = useQuery({ queryKey: ["pavi-conversations"], queryFn: getConversations });
+  const prefs = useQuery({ queryKey: ["pavi-prefs"], queryFn: getPreferences });
+  const needsPhone = Boolean(prefs.data && prefs.data.phone_call_enabled && !prefs.data.phone_number_masked);
 
   const chat = useMutation({
     mutationFn: async ({ text, voice }: { text: string; voice?: boolean }) => {
@@ -54,6 +56,7 @@ export function PaviAssistant() {
       queryClient.invalidateQueries({ queryKey: ["pavi-appointments"] });
       queryClient.invalidateQueries({ queryKey: ["pavi-schedule"] });
       queryClient.invalidateQueries({ queryKey: ["pavi-conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["pavi-prefs"] });
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : "I couldn't save that reminder right now. Please try again.";
@@ -131,6 +134,16 @@ export function PaviAssistant() {
             Schedule
           </Link>
         </header>
+
+        {needsPhone && (
+          <div className="shrink-0 border-b border-amber-500/20 bg-amber-50 px-4 py-2.5 text-sm text-amber-950 md:px-5">
+            Pavi can save reminders, but it cannot call you until a mobile number is saved.{" "}
+            <Link href="/settings" className="font-medium underline underline-offset-2">
+              Add your +91 number in Settings
+            </Link>
+            .
+          </div>
+        )}
 
         <PaviChat
           messages={messages}

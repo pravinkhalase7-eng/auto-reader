@@ -25,6 +25,12 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logging.getLogger("app.main").info("DATABASE_URL=%s", settings.database_url)
+    logging.getLogger("app.pavi.voice").info(
+        "voice_call_mode=%s twilio_configured=%s webhook_base=%s",
+        settings.voice_call_mode,
+        bool(settings.twilio_account_sid and settings.twilio_auth_token and settings.twilio_phone_number),
+        settings.resolved_twilio_webhook_base,
+    )
     async with engine.begin() as conn:
         if "sqlite" in settings.database_url:
             await conn.execute(text("PRAGMA journal_mode=WAL"))

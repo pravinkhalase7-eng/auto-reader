@@ -21,7 +21,7 @@ class TwilioVoiceService:
         self.provider = get_voice_provider()
 
     def public_base(self) -> str:
-        return (self.settings.twilio_webhook_base_url or "http://localhost:8000").rstrip("/")
+        return (self.settings.resolved_twilio_webhook_base).rstrip("/")
 
     def twiml_url(self, reminder_id: str) -> str:
         return f"{self.public_base()}{self.settings.api_prefix}/voice/twilio/twiml/{reminder_id}"

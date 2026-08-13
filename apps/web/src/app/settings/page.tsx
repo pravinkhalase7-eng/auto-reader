@@ -62,10 +62,15 @@ export default function SettingsPage() {
             <input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder={prefs.data?.phone_number_masked || "+91 98XXXXXXXX"}
+              placeholder="+91 98XXXXXXXX"
               className="mt-1 w-full rounded-xl border border-teal-900/15 px-3 py-2"
             />
           </label>
+          {prefs.data?.phone_number_masked ? (
+            <p className="text-xs text-teal-800/60">Saved number: {prefs.data.phone_number_masked}. Type a new number only if you want to change it.</p>
+          ) : (
+            <p className="text-xs text-amber-800">Required for phone reminders. Use E.164, for example +917219584184.</p>
+          )}
           <label className="block text-sm font-medium text-teal-900">
             Timezone
             <input value={timezone} onChange={(e) => setTimezone(e.target.value)} className="mt-1 w-full rounded-xl border border-teal-900/15 px-3 py-2" />

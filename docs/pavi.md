@@ -122,16 +122,26 @@ Pavi uses the official [`google-adk`](https://github.com/google/adk-python) pack
 
 1. Buy/verify a Twilio number.
 2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`.
-3. Expose the API with HTTPS (ngrok or your VPS) and set `TWILIO_WEBHOOK_BASE_URL=https://your-host`.
+3. Set `TWILIO_WEBHOOK_BASE_URL` to the **public API origin** (no `/api/v1`), e.g. `http://187.127.138.86:8000`. If this is empty, Pavi now derives it from `NEXT_PUBLIC_API_URL`.
 4. Set `VOICE_CALL_MODE=live`.
-5. Keep `VOICE_CALL_MODE=mock` until you are ready — mock logs `[MOCK CALL] Calling +91******XXXX` and never dials.
+5. Save a `+91` mobile number in **Settings**. Chat success only means the reminder was stored — Twilio will not dial without a number on file.
+6. Keep `VOICE_CALL_MODE=mock` until you are ready — mock logs `[MOCK CALL] Calling +91******XXXX` and never dials.
 
 Twilio webhooks:
 
 - `POST /api/v1/voice/twilio/twiml/{reminder_id}`
 - `POST /api/v1/voice/twilio/status`
 
-Signatures are validated when `VOICE_CALL_MODE=live`.
+Signatures are validated when `VOICE_CALL_MODE=live`. Unsigned posts return `403 Invalid signature` in live mode (that is expected).
+
+If a reminder is saved but the phone never rings:
+
+1. Open Settings and confirm a number is saved (not just the placeholder).
+2. `GET /api/v1/health` should show `voice_call_mode=live`, `twilio_configured=true`, `webhook_public=true`.
+3. `docker logs aiteacher-api` and `docker logs aiteacher-celery-worker` for `[REMINDER]` / `[VOICE_CALL]`.
+4. On the Pavi dashboard, check reminder `last_error` (e.g. `No phone number on file`) and call history.
+
+Do **not** point `TWILIO_WEBHOOK_BASE_URL` at a local Cloudflare/ngrok tunnel from another machine.
 
 ## 10. Test a reminder
 
@@ -171,8 +181,10 @@ curl -X POST http://localhost:8000/api/v1/dev/test-call \
 - [ ] Redis + celery-worker + celery-beat running
 - [ ] `GEMINI_API_KEY` set; `PAVI_AGENT_MODE=adk`
 - [ ] `PAVI_TTS_PROVIDER=gemini` once TTS quality is verified
-- [ ] Twilio credentials + `TWILIO_WEBHOOK_BASE_URL` over HTTPS
+- [ ] Twilio credentials in the Jenkins env file (same Account SID / Auth Token / from-number as local)
+- [ ] `TWILIO_WEBHOOK_BASE_URL=http://187.127.138.86:8000` (or HTTPS if you terminate TLS)
 - [ ] `VOICE_CALL_MODE=live` only after a successful test call
+- [ ] User phone number saved in Settings (`+91…`)
 - [ ] `ENABLE_DEV_TOOLS=false` and `ENVIRONMENT=production`
 - [ ] User phone numbers stored in E.164; never logged in full
 - [ ] CORS limited to the real web origin

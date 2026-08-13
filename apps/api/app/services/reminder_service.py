@@ -32,7 +32,7 @@ def to_out(reminder: Reminder) -> ReminderOut:
         language=reminder.language,
         appointment_id=reminder.appointment_id,
         booking_id=reminder.booking_id,
-        last_error=reminder.last_error,
+        last_error=reminder.last_error or reminder.call_scheduling_error,
         created_at=reminder.created_at,
         updated_at=reminder.updated_at,
         completed_at=reminder.completed_at,
