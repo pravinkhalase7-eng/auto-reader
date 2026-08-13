@@ -114,9 +114,9 @@ export function PaviAssistant() {
   const hasThread = messages.length > 0;
 
   return (
-    <div className="grid h-[calc(100vh-7.5rem)] gap-4 lg:grid-cols-[minmax(0,1fr)_280px] lg:h-[calc(100vh-6rem)]">
+    <div className="grid h-[calc(100dvh-7.5rem)] min-h-0 gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] lg:h-[calc(100dvh-6rem)]">
       <section className="flex min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-white/70 bg-white/80 shadow-[0_20px_60px_-32px_rgba(15,80,70,0.45)] backdrop-blur-sm">
-        <header className="flex items-center gap-3 border-b border-teal-900/6 px-4 py-3 md:px-5">
+        <header className="flex shrink-0 items-center gap-3 border-b border-teal-900/6 px-4 py-3 md:px-5">
           <PaviAvatar listening={listening} speaking={chat.isPending} size="md" />
           <div className="min-w-0 flex-1">
             <p className="font-display text-lg font-semibold leading-tight text-teal-950">Pavi</p>
@@ -156,7 +156,7 @@ export function PaviAssistant() {
           }
         />
 
-        <div className="border-t border-teal-900/6 px-4 py-3 md:px-5">
+        <div className="shrink-0 border-t border-teal-900/6 bg-white/90 px-4 py-3 md:px-5">
           {listening && interim && (
             <p className="mb-2 truncate px-2 text-center text-sm text-teal-800/70">“{interim}”</p>
           )}

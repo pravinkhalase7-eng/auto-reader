@@ -21,8 +21,8 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
   const { user, logout } = useAuthStore();
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-40 border-b border-teal-900/10 bg-[#f3f7f4]/90 backdrop-blur-md">
+    <div className={cn(compact ? "flex h-dvh flex-col overflow-hidden" : "min-h-screen")}>
+      <header className={cn("z-40 border-b border-teal-900/10 bg-[#f3f7f4]/90 backdrop-blur-md", compact ? "shrink-0" : "sticky top-0")}>
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
           <Link href="/dashboard" className="font-display text-xl font-bold tracking-tight text-teal-950">
             AI Teacher
@@ -73,7 +73,7 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
           ))}
         </nav>
       </header>
-      <main className={cn("mx-auto w-full px-3 md:px-4", compact ? "max-w-7xl py-3 md:py-4" : "max-w-6xl py-6 md:py-10")}>{children}</main>
+      <main className={cn("mx-auto w-full px-3 md:px-4", compact ? "max-w-7xl min-h-0 overflow-hidden py-3 md:py-4" : "max-w-6xl py-6 md:py-10")}>{children}</main>
     </div>
   );
 }
