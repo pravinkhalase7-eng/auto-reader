@@ -26,8 +26,8 @@ pipeline {
     )
     booleanParam(
       name: 'RESET_POSTGRES',
-      defaultValue: false,
-      description: 'Delete Postgres data and start empty. Use once after password authentication failed (changing POSTGRES_PASSWORD does not update an existing volume). Wipes lessons in the DB.'
+      defaultValue: true,
+      description: 'Delete Postgres data so the password in the env file is used. Leave ON until login works. Wipes lessons in the DB.'
     )
     string(
       name: 'PUBLIC_API_URL',
@@ -221,20 +221,17 @@ Then rebuild.''')
             docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/^aiteacher-api:|^aiteacher-web:/{print $2}' | sort -u | xargs -r docker rmi -f
             echo "=== Remaining aiteacher images ==="
             docker images | grep aiteacher || echo "(none)"
+            echo "=== Docker volumes before Postgres reset ==="
+            docker volume ls
+            echo "Deleting Postgres volumes so POSTGRES_PASSWORD from .env is used"
+            docker volume rm -f aiteacher_pgdata aiteacher_aiteacher_pgdata 2>/dev/null || true
+            docker volume ls --format '{{.Name}}' | grep -E 'aiteacher' | grep -E 'pgdata|postgres' | while read -r vol; do
+              echo "Removing volume ${vol}"
+              docker volume rm -f "${vol}" || true
+            done
+            echo "=== Docker volumes after Postgres reset ==="
+            docker volume ls
           '''
-          if (params.RESET_POSTGRES) {
-            sh '''
-              set +e
-              echo "RESET_POSTGRES=true — deleting Postgres volumes (DB lessons will be wiped)"
-              docker volume ls
-              docker volume ls --format '{{.Name}}' | grep -E 'aiteacher' | grep -E 'pgdata|postgres' | while read -r vol; do
-                echo "Removing volume ${vol}"
-                docker volume rm -f "${vol}" || true
-              done
-            '''
-          } else {
-            echo "Keeping Postgres volume. If login fails with InvalidPasswordError, rebuild with RESET_POSTGRES=true."
-          }
         }
       }
     }

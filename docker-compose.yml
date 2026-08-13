@@ -6,14 +6,15 @@ services:
     image: postgres:16-alpine
     container_name: aiteacher-postgres
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aiteacher}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiteacher}
       POSTGRES_DB: ${POSTGRES_DB:-aiteacher}
     volumes:
       - aiteacher_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiteacher} -d ${POSTGRES_DB:-aiteacher}"]
+      test: ["CMD-SHELL", "pg_isready -U aiteacher -d aiteacher"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -45,16 +46,6 @@ services:
       - .env
     environment:
       PYTHONPATH: /app
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://aiteacher:aiteacher@postgres:5432/aiteacher}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-      AI_PROVIDER: ${AI_PROVIDER:-local}
-      OCR_PROVIDER: ${OCR_PROVIDER:-local}
-      TTS_PROVIDER: ${TTS_PROVIDER:-browser}
-      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
-      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
     volumes:
       - aiteacher_storage:/app/storage
     healthcheck:
@@ -89,7 +80,9 @@ services:
 
 volumes:
   aiteacher_pgdata:
+    name: aiteacher_pgdata
   aiteacher_storage:
+    name: aiteacher_storage
 
 networks:
   aiteacher:
