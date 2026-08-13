@@ -91,7 +91,7 @@ pipeline {
       }
     }
 
-    stage('Prepare Env') {
+    stage('Prepare Env!') {
       when {
         expression { return !params.SKIP_DEPLOY }
       }
