@@ -1,19 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/auth-store";
+import { useAuthHydrated } from "@/lib/use-require-auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { User } from "@/types";
 
-export default function LoginPage() {
+function safeNext(raw: string | null) {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/dashboard";
+  return raw;
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = safeNext(searchParams.get("next"));
   const setAuth = useAuthStore((s) => s.setAuth);
+  const token = useAuthStore((s) => s.token);
+  const hydrated = useAuthHydrated();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (hydrated && token) router.replace(next);
+  }, [hydrated, token, next, router]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -29,7 +43,7 @@ export default function LoginPage() {
         }),
       });
       setAuth(res.user, res.access_token);
-      router.push("/dashboard");
+      router.push(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in");
     } finally {
@@ -75,5 +89,13 @@ export default function LoginPage() {
         </p>
       </Card>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }

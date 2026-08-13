@@ -1,5 +1,6 @@
 import uuid
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 
 from fastapi import FastAPI, Request
@@ -36,8 +37,30 @@ async def lifespan(_: FastAPI):
             from app.services.seed import seed_demo_lessons
 
             await seed_demo_lessons(session)
-    yield
-    await engine.dispose()
+
+    stop = asyncio.Event()
+
+    async def reminder_loop() -> None:
+        from app.workers.beat_tasks import scan_due_reminders_inline
+
+        interval = max(5, int(settings.reminder_scan_interval_seconds))
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(scan_due_reminders_inline)
+            except Exception:
+                logging.getLogger("app.pavi.beat").exception("inline_reminder_scan_failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+            except TimeoutError:
+                continue
+
+    task = asyncio.create_task(reminder_loop())
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        await engine.dispose()
 
 
 app = FastAPI(

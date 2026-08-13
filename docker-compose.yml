@@ -14,7 +14,7 @@ services:
     volumes:
       - aiteacher_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aiteacher -d aiteacher"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiteacher} -d ${POSTGRES_DB:-aiteacher}"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -26,7 +26,11 @@ services:
     image: redis:7-alpine
     container_name: aiteacher-redis
     restart: unless-stopped
-    profiles: ["redis"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     networks:
       - aiteacher
 
@@ -39,6 +43,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "${API_HOST_PORT:-8000}:8000"
@@ -54,6 +60,48 @@ services:
       timeout: 5s
       retries: 8
       start_period: 35s
+    networks:
+      - aiteacher
+
+  celery-worker:
+    image: aiteacher-api:${IMAGE_TAG:-latest}
+    container_name: aiteacher-celery-worker
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - aiteacher_storage:/app/storage
+    networks:
+      - aiteacher
+
+  celery-beat:
+    image: aiteacher-api:${IMAGE_TAG:-latest}
+    container_name: aiteacher-celery-beat
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - aiteacher_storage:/app/storage
     networks:
       - aiteacher
 

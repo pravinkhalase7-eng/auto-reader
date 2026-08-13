@@ -38,6 +38,8 @@ def get_tts_provider() -> TTSProvider:
         "browser": LocalTTSProvider,
         "google": GoogleTTSProvider,
         "openai": OpenAITTSProvider,
+        "gemini": LocalTTSProvider,
+        "mock": LocalTTSProvider,
     }
     return mapping.get(settings.tts_provider, LocalTTSProvider)()
 

@@ -9,25 +9,18 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import type { Dashboard } from "@/types";
-import { useAuthStore } from "@/store/auth-store";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useRequireAuth } from "@/lib/use-require-auth";
 
 export default function DashboardPage() {
-  const token = useAuthStore((s) => s.token);
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!token) router.replace("/login");
-  }, [token, router]);
+  const { token, ready } = useRequireAuth();
 
   const { data, isLoading } = useQuery({
     queryKey: ["dashboard"],
     queryFn: () => api<Dashboard>("/dashboard"),
-    enabled: !!token,
+    enabled: !!token && ready,
   });
 
-  if (!token) return null;
+  if (!ready) return null;
 
   return (
     <AppShell>
@@ -36,11 +29,16 @@ export default function DashboardPage() {
           <h1 className="font-display text-3xl font-bold text-teal-950 md:text-4xl">My Learning</h1>
           <p className="mt-2 max-w-2xl text-teal-900/75">{data?.greeting || "Loading your classroom..."}</p>
         </div>
-        <Button asChild size="lg">
-          <Link href="/upload">
-            <BookPlus className="h-4 w-4" /> New story
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="lg">
+            <Link href="/pavi">Talk to Pavi</Link>
+          </Button>
+          <Button asChild size="lg">
+            <Link href="/upload">
+              <BookPlus className="h-4 w-4" /> New story
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

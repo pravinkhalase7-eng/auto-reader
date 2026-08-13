@@ -2,19 +2,20 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, BookPlus, Home, LogOut, User } from "lucide-react";
+import { BookOpen, BookPlus, Home, LogOut, Sparkles, User } from "lucide-react";
 import { useAuthStore } from "@/store/auth-store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "Home", icon: Home },
+  { href: "/pavi", label: "Pavi", icon: Sparkles },
   { href: "/lessons", label: "Lessons", icon: BookOpen },
   { href: "/upload", label: "New story", icon: BookPlus },
   { href: "/profile", label: "Profile", icon: User },
 ];
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ children, compact }: { children: React.ReactNode; compact?: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuthStore();
@@ -72,7 +73,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-6 md:py-10">{children}</main>
+      <main className={cn("mx-auto w-full px-3 md:px-4", compact ? "max-w-7xl py-3 md:py-4" : "max-w-6xl py-6 md:py-10")}>{children}</main>
     </div>
   );
 }

@@ -28,7 +28,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY app ./app
 COPY scripts ./scripts
 
-RUN mkdir -p /app/storage/originals /app/storage/processed /app/storage/audio \
+RUN mkdir -p /app/storage/originals /app/storage/processed /app/storage/audio /app/storage/pavi_tts \
     && python -m py_compile app/main.py \
          app/core/config.py \
          app/providers/ocr.py \

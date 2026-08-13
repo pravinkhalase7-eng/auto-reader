@@ -29,3 +29,27 @@ body {
   outline: 2px solid #0f766e;
   outline-offset: 2px;
 }
+
+@keyframes pavi-wave {
+  0%, 100% { height: 0.4rem; }
+  50% { height: 1.4rem; }
+}
+
+.pavi-wave {
+  height: 0.8rem;
+  animation: pavi-wave 0.9s ease-in-out infinite;
+}
+
+.pavi-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 79, 74, 0.25) transparent;
+}
+
+.pavi-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pavi-scroll::-webkit-scrollbar-thumb {
+  background: rgba(15, 79, 74, 0.22);
+  border-radius: 999px;
+}

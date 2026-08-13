@@ -1,3 +1,13 @@
+from app.models.pavi import (
+    Appointment,
+    Booking,
+    Conversation,
+    Message,
+    PaviIdempotencyKey,
+    PhoneCall,
+    Reminder,
+    UserPreference,
+)
 from app.models.entities import (
     AIProcessingJob,
     Answer,
@@ -20,6 +30,14 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "Appointment",
+    "Booking",
+    "Conversation",
+    "Message",
+    "PaviIdempotencyKey",
+    "PhoneCall",
+    "Reminder",
+    "UserPreference",
     "User",
     "StudentProfile",
     "Lesson",
