@@ -91,7 +91,7 @@ pipeline {
       }
     }
 
-stage('Prepare Env') {
+    stage('Prepare Env') {
       when {
         expression { return !params.SKIP_DEPLOY }
       }
@@ -148,59 +148,14 @@ Then rebuild.''')
 
           sh '''
             set -e
-            tr -d '\\r' < .env.deploy | sed '1s/^\\xEF\\xBB\\xBF//' > .env.deploy.normalized
-            mv .env.deploy.normalized .env.deploy
-
-            if command -v python3 >/dev/null 2>&1; then
-              python3 scripts/normalize_deploy_env.py .env.deploy
-            else
-              echo "WARN: python3 not on agent — quoting POSTGRES_PASSWORD inline"
-              if grep -qE '^[[:space:]]*POSTGRES_PASSWORD[[:space:]]*=' .env.deploy; then
-                sed -i.bak -E "s|^[[:space:]]*POSTGRES_PASSWORD[[:space:]]*=([^'\"].*)$|POSTGRES_PASSWORD='\\1'|" .env.deploy
-              fi
+            python3 scripts/normalize_deploy_env.py .env.deploy
+            if [ -n "$PUBLIC_API_URL" ]; then
+              python3 scripts/normalize_deploy_env.py .env.deploy --public-api-url "$PUBLIC_API_URL"
             fi
-
-            env_val() {
-              grep -E "^[[:space:]]*${1}[[:space:]]*=" .env.deploy 2>/dev/null | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'\'']//;s/["'\'']$//' || true
-            }
-
-            if [ -n "${PUBLIC_API_URL}" ]; then
-              if grep -qE '^[[:space:]]*NEXT_PUBLIC_API_URL[[:space:]]*=' .env.deploy; then
-                sed -i.bak "s|^[[:space:]]*NEXT_PUBLIC_API_URL[[:space:]]*=.*|NEXT_PUBLIC_API_URL=${PUBLIC_API_URL}|" .env.deploy
-              else
-                echo "NEXT_PUBLIC_API_URL=${PUBLIC_API_URL}" >> .env.deploy
-              fi
-              echo "PUBLIC_API_URL applied: ${PUBLIC_API_URL}"
-              if command -v python3 >/dev/null 2>&1; then
-                python3 scripts/normalize_deploy_env.py .env.deploy
-              fi
-            fi
-
-            echo "=== .env.deploy key check (values hidden) ==="
-            missing=0
-            for key in SECRET_KEY DATABASE_URL NEXT_PUBLIC_API_URL CORS_ORIGINS POSTGRES_PASSWORD GOOGLE_AI_API_KEY; do
-              val="$(env_val "$key")"
-              if [ -n "$val" ]; then
-                echo "$key=SET"
-              else
-                echo "$key=MISSING"
-                if [ "$key" != "GOOGLE_AI_API_KEY" ]; then
-                  missing=1
-                fi
-              fi
-            done
-            if [ -z "$(env_val GOOGLE_AI_API_KEY)" ]; then
-              echo "WARN: GOOGLE_AI_API_KEY is empty — story pictures will not draw."
-              echo "Put GOOGLE_AI_API_KEY=... in the Jenkins secret file (not GOOGLE_API_KEY)."
-            fi
-            if [ "$missing" = "1" ]; then
-              echo "ERROR: required deploy keys are missing from the env file."
-              exit 1
-            fi
-            echo "=== DATABASE_URL from .env.deploy (raw line) ==="
-            grep -E '^[[:space:]]*DATABASE_URL=' .env.deploy || true
-            echo "=== POSTGRES_PASSWORD from .env.deploy (raw line) ==="
-            grep -E '^[[:space:]]*POSTGRES_PASSWORD=' .env.deploy || true
+            echo "=== DATABASE_URL from .env.deploy ==="
+            grep DATABASE_URL .env.deploy || true
+            echo "=== POSTGRES_PASSWORD from .env.deploy ==="
+            grep POSTGRES_PASSWORD .env.deploy || true
           '''
           echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
         }
@@ -218,17 +173,12 @@ Then rebuild.''')
             docker compose -f docker-compose.yml down --remove-orphans || true
             docker rm -f aiteacher-api aiteacher-web aiteacher-postgres aiteacher-redis 2>/dev/null || true
             docker rmi -f aiteacher-api:latest aiteacher-web:latest 2>/dev/null || true
-            docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/^aiteacher-api:|^aiteacher-web:/{print $2}' | sort -u | xargs -r docker rmi -f
             echo "=== Remaining aiteacher images ==="
-            docker images | grep aiteacher || echo "(none)"
+            docker images | grep aiteacher || echo none
             echo "=== Docker volumes before Postgres reset ==="
             docker volume ls
             echo "Deleting Postgres volumes so POSTGRES_PASSWORD from .env is used"
             docker volume rm -f aiteacher_pgdata aiteacher_aiteacher_pgdata 2>/dev/null || true
-            docker volume ls --format '{{.Name}}' | grep -E 'aiteacher' | grep -E 'pgdata|postgres' | while read -r vol; do
-              echo "Removing volume ${vol}"
-              docker volume rm -f "${vol}" || true
-            done
             echo "=== Docker volumes after Postgres reset ==="
             docker volume ls
           '''
@@ -296,27 +246,16 @@ Then rebuild.''')
           echo "=== DATABASE_URL after bash source ==="
           echo "DATABASE_URL=${DATABASE_URL}"
           echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
-          echo "POSTGRES_PASSWORD_LEN=${#POSTGRES_PASSWORD}"
           echo "=== .env file lines ==="
-          grep -E '^[[:space:]]*(DATABASE_URL|POSTGRES_PASSWORD|POSTGRES_USER|POSTGRES_DB)=' .env || true
+          grep DATABASE_URL .env || true
+          grep POSTGRES_PASSWORD .env || true
           echo "=== docker compose resolved env ==="
-          docker compose -f docker-compose.yml config | grep -E 'DATABASE_URL|POSTGRES_PASSWORD|POSTGRES_USER' || true
+          docker compose -f docker-compose.yml config | grep DATABASE_URL || true
+          docker compose -f docker-compose.yml config | grep POSTGRES_PASSWORD || true
 
           echo "Freeing previous AI Teacher containers (if any)..."
           docker compose -f docker-compose.yml down --remove-orphans || true
           docker rm -f aiteacher-api aiteacher-web aiteacher-postgres aiteacher-redis 2>/dev/null || true
-
-          free_port() {
-            PORT="$1"
-            CID="$(docker ps --format '{{.ID}} {{.Ports}}' | awk -v p=":${PORT}->" 'index($0,p){print $1; exit}')"
-            if [ -n "$CID" ]; then
-              echo "Port ${PORT} is used by container ${CID} — stopping it"
-              docker stop "$CID" || true
-              docker rm "$CID" || true
-            fi
-          }
-          free_port "${API_HOST_PORT}"
-          free_port "${WEB_HOST_PORT}"
 
           echo "Starting Postgres first..."
           docker compose -f docker-compose.yml up -d --no-build postgres
@@ -324,34 +263,21 @@ Then rebuild.''')
           echo "Waiting for Postgres..."
           PG_USER="${POSTGRES_USER:-aiteacher}"
           ready=0
-          for i in $(seq 1 30); do
+          i=1
+          while [ "$i" -le 30 ]; do
             if docker exec aiteacher-postgres pg_isready -U "$PG_USER" >/dev/null 2>&1; then
               echo "Postgres ready"
               ready=1
               break
             fi
             echo "attempt ${i}: postgres starting"
+            i=$((i + 1))
             sleep 2
           done
           if [ "$ready" != "1" ]; then
             echo "Postgres did not become ready"
             docker compose -f docker-compose.yml logs postgres --tail=80
             exit 1
-          fi
-
-          # Existing volumes keep the first-boot password. Reset the role to match .env
-          # using peer auth inside the container (no password needed).
-          env_val() {
-            grep -E "^[[:space:]]*${1}[[:space:]]*=" .env 2>/dev/null | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'\'']//;s/["'\'']$//' || true
-          }
-          PG_PASS="$(env_val POSTGRES_PASSWORD)"
-          PG_DB="$(env_val POSTGRES_DB)"; PG_DB="${PG_DB:-aiteacher}"
-          if [ -n "$PG_PASS" ]; then
-            echo "Syncing Postgres role password to env file (length=${#PG_PASS})"
-            SQL_PASS=$(printf "%s" "$PG_PASS" | sed "s/'/''/g")
-            docker exec -u postgres aiteacher-postgres \
-              psql -d postgres -v ON_ERROR_STOP=1 \
-              -c "ALTER USER \"${PG_USER}\" WITH PASSWORD '${SQL_PASS}';"
           fi
 
           echo "Starting API and web from the images just built..."
@@ -361,8 +287,9 @@ Then rebuild.''')
           echo "=== aiteacher-postgres POSTGRES_PASSWORD inside container ==="
           docker exec aiteacher-postgres printenv POSTGRES_PASSWORD || true
 
-          echo "Waiting for API healthy (via docker exec — works with Jenkins-in-Docker)..."
-          for i in $(seq 1 45); do
+          echo "Waiting for API healthy via docker exec..."
+          i=1
+          while [ "$i" -le 45 ]; do
             if docker exec aiteacher-api curl -fsS http://127.0.0.1:8000/api/v1/health >/tmp/aiteacher_health.json 2>/dev/null; then
               echo "API healthy"
               cat /tmp/aiteacher_health.json
@@ -377,6 +304,7 @@ Then rebuild.''')
               echo
               exit 0
             fi
+            i=$((i + 1))
             sleep 3
           done
           echo "API health check failed"
