@@ -175,6 +175,27 @@ def test_placeholder_illustration_is_png():
     assert len(png) > 200
 
 
+def test_illustration_status_reports_missing_key(monkeypatch):
+    from app.services import story_illustrations as si
+
+    si._draw_status.clear()
+    monkeypatch.setattr(si, "get_settings", lambda: type("S", (), {"google_ai_api_key": ""})())
+    status, message = si.public_illustration_status("lesson-1", 0)
+    assert status == "unavailable"
+    assert "key" in message.lower()
+
+
+def test_illustration_status_reports_failure(monkeypatch):
+    from app.services import story_illustrations as si
+
+    si._draw_status.clear()
+    monkeypatch.setattr(si, "get_settings", lambda: type("S", (), {"google_ai_api_key": "set"})())
+    si.set_illustration_status("lesson-1", "failed", "Gemini quota is empty.")
+    status, message = si.public_illustration_status("lesson-1", 0)
+    assert status == "failed"
+    assert "quota" in message.lower()
+
+
 def test_tesseract_data_filters_low_confidence():
     from app.providers.ocr import _text_from_tesseract_data
 

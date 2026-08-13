@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -523,6 +524,18 @@ async def generate_lesson_illustrations(
 
 
 _draw_locks: dict[str, asyncio.Lock] = {}
+_draw_status: dict[str, dict[str, object]] = {}
+
+DRAWING_STALE_SECONDS = 180
+MSG_DRAWING = "Drawing the story in order. Pictures appear one by one — this can take a minute."
+MSG_NO_KEY = (
+    "I can't draw story pictures on this server yet. "
+    "Add a Google AI key, then tap Draw the story now."
+)
+MSG_FAILED = (
+    "I couldn't draw the pictures this time. "
+    "Gemini may be busy or out of quota. Try again in a bit."
+)
 
 
 def _draw_lock(lesson_id: str) -> asyncio.Lock:
@@ -538,6 +551,41 @@ def illustration_in_progress(lesson_id: str) -> bool:
     return bool(lock and lock.locked())
 
 
+def set_illustration_status(lesson_id: str, status: str, message: str = "") -> None:
+    _draw_status[lesson_id] = {
+        "status": status,
+        "message": message,
+        "updated_at": time.time(),
+    }
+
+
+def public_illustration_status(lesson_id: str, gemini_count: int) -> tuple[str, str]:
+    """Tell the UI whether pictures are ready, still drawing, or cannot be drawn."""
+    has_key = bool(get_settings().google_ai_api_key)
+    in_progress = illustration_in_progress(lesson_id)
+    state = _draw_status.get(lesson_id) or {}
+    status = str(state.get("status") or "")
+    updated = float(state.get("updated_at") or 0)
+    stale_drawing = (
+        status == "drawing"
+        and not in_progress
+        and updated > 0
+        and (time.time() - updated) > DRAWING_STALE_SECONDS
+    )
+
+    if gemini_count >= 4:
+        return "ready", ""
+    if in_progress or (status == "drawing" and not stale_drawing):
+        return "drawing", str(state.get("message") or MSG_DRAWING)
+    if not has_key:
+        return "unavailable", MSG_NO_KEY
+    if status == "failed" or stale_drawing:
+        return "failed", str(state.get("message") or MSG_FAILED)
+    if status == "unavailable":
+        return "unavailable", str(state.get("message") or MSG_NO_KEY)
+    return "idle", MSG_DRAWING
+
+
 async def draw_lesson_illustrations(
     lesson_id: str,
     *,
@@ -548,14 +596,17 @@ async def draw_lesson_illustrations(
     from app.core.database import AsyncSessionLocal
 
     async with _draw_lock(lesson_id):
+        set_illustration_status(lesson_id, "drawing", MSG_DRAWING)
         skip_positions: set[int] = set()
         async with AsyncSessionLocal() as db:
             lesson = await db.get(Lesson, lesson_id)
             if not lesson:
+                set_illustration_status(lesson_id, "failed", MSG_FAILED)
                 return []
             existing = await list_lesson_illustrations(db, lesson_id)
             gemini_rows = [row for row in existing if row.provider == "gemini"]
             if not force and len(gemini_rows) >= 4:
+                set_illustration_status(lesson_id, "ready", "")
                 return existing
             if not force:
                 skip_positions = {row.position for row in gemini_rows}
@@ -563,20 +614,42 @@ async def draw_lesson_illustrations(
             language = lesson.language
             story = lesson.edited_text or lesson.original_text or ""
 
-        prepared = await _prepare_illustration_files(
-            lesson_id,
-            title,
-            language,
-            story,
-            prefer_gemini=prefer_gemini,
-            persist_each=True,
-            skip_positions=skip_positions,
-        )
+        try:
+            prepared = await _prepare_illustration_files(
+                lesson_id,
+                title,
+                language,
+                story,
+                prefer_gemini=prefer_gemini,
+                persist_each=True,
+                skip_positions=skip_positions,
+            )
+        except Exception:
+            set_illustration_status(lesson_id, "failed", MSG_FAILED)
+            raise
         if not prepared and not skip_positions:
+            if prefer_gemini and not get_settings().google_ai_api_key:
+                set_illustration_status(lesson_id, "unavailable", MSG_NO_KEY)
+            else:
+                set_illustration_status(lesson_id, "failed", MSG_FAILED)
             return []
 
         async with AsyncSessionLocal() as db:
-            return await list_lesson_illustrations(db, lesson_id)
+            rows = await list_lesson_illustrations(db, lesson_id)
+        gemini_count = sum(1 for row in rows if row.provider == "gemini")
+        if gemini_count >= 4:
+            set_illustration_status(lesson_id, "ready", "")
+        elif gemini_count:
+            set_illustration_status(
+                lesson_id,
+                "failed",
+                "I drew some pictures, but the rest didn't finish. Try again.",
+            )
+        elif prefer_gemini and not get_settings().google_ai_api_key:
+            set_illustration_status(lesson_id, "unavailable", MSG_NO_KEY)
+        else:
+            set_illustration_status(lesson_id, "failed", MSG_FAILED)
+        return rows
 
 
 async def list_lesson_illustrations(db: AsyncSession, lesson_id: str) -> list[LessonIllustration]:

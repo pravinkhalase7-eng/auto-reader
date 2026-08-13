@@ -8,9 +8,26 @@ import { Button } from "@/components/ui/button";
 import { api, getToken } from "@/lib/api";
 import { API_URL } from "@/lib/utils";
 import { useReaderStore } from "@/store/reader-store";
-import type { StoryIllustration } from "@/types";
+import type { IllustrationsResponse, StoryIllustration } from "@/types";
 
 const EMPTY_SCENES: StoryIllustration[] = [];
+const DRAWING_TIMEOUT_MS = 90_000;
+
+function normalizeIllustrations(raw: IllustrationsResponse | StoryIllustration[]): IllustrationsResponse {
+  if (Array.isArray(raw)) {
+    const geminiReady = raw.filter((scene) => scene.provider === "gemini").length;
+    return {
+      scenes: raw,
+      status: geminiReady >= 4 ? "ready" : "drawing",
+      message:
+        geminiReady >= 4
+          ? ""
+          : "Drawing the story in order. Pictures appear one by one — this can take a minute.",
+      gemini_ready: geminiReady,
+    };
+  }
+  return raw;
+}
 
 export function downloadSceneImage(url: string, filename: string) {
   const link = document.createElement("a");
@@ -22,16 +39,32 @@ export function downloadSceneImage(url: string, filename: string) {
 }
 
 export function useStoryIllustrationAssets(lessonId: string) {
-  const { data, isLoading, isFetching } = useQuery({
+  const [timedOut, setTimedOut] = useState(false);
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["illustrations", lessonId],
-    queryFn: () => api<StoryIllustration[]>(`/lessons/${lessonId}/illustrations`),
+    queryFn: async () =>
+      normalizeIllustrations(await api<IllustrationsResponse | StoryIllustration[]>(`/lessons/${lessonId}/illustrations`)),
     enabled: !!lessonId,
-    refetchInterval: (query) => {
-      const ready = (query.state.data ?? []).filter((s) => s.provider === "gemini").length;
-      return ready < 4 ? 4000 : false;
-    },
+    refetchInterval: timedOut
+      ? false
+      : (query) => (query.state.data?.status === "drawing" ? 4000 : false),
   });
-  const allScenes = data ?? EMPTY_SCENES;
+
+  useEffect(() => {
+    if (data?.status !== "drawing") {
+      setTimedOut(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setTimedOut(true), DRAWING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [data?.status, lessonId]);
+
+  const status = timedOut && data?.status === "drawing" ? "failed" : (data?.status ?? (isLoading ? "drawing" : "failed"));
+  const message =
+    timedOut && data?.status === "drawing"
+      ? "This is taking longer than usual. The pictures may not be set up on this server, or Gemini is busy."
+      : (data?.message ?? "");
+  const allScenes = data?.scenes ?? EMPTY_SCENES;
   const scenes = useMemo(
     () => allScenes.filter((scene) => scene.provider === "gemini"),
     [allScenes],
@@ -71,7 +104,7 @@ export function useStoryIllustrationAssets(lessonId: string) {
     };
   }, [sceneKey, scenes]);
 
-  return { scenes, urls, isLoading, isFetching };
+  return { scenes, urls, isLoading, isError, error, status, message, refetch };
 }
 
 export function sceneIndexForParagraph(
@@ -94,7 +127,8 @@ export function StoryIllustrations({
 }) {
   const paragraphIndex = useReaderStore((s) => s.paragraphIndex);
   const queryClient = useQueryClient();
-  const { scenes, urls, isLoading, isFetching } = useStoryIllustrationAssets(lessonId);
+  const { scenes, urls, isLoading, isError, error, status, message, refetch } =
+    useStoryIllustrationAssets(lessonId);
   const [drawing, setDrawing] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
 
@@ -117,28 +151,40 @@ export function StoryIllustrations({
       setPicked(null);
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Could not draw the pictures.");
+      await refetch();
     } finally {
       setDrawing(false);
     }
   }
 
-  if (isLoading) {
+  if (isLoading && status === "drawing" && !scenes.length) {
     return (
       <Card>
-        <p className="text-sm text-teal-900/70">Drawing the story pictures...</p>
+        <p className="text-sm text-teal-900/70">Looking for story pictures...</p>
       </Card>
     );
   }
 
   if (!scenes.length) {
+    const waiting = status === "drawing" || drawing;
     return (
       <Card>
         <p className="font-display text-lg font-semibold text-teal-950">Story pictures</p>
-        <p className="mt-1 text-sm text-teal-900/70">
-          Drawing the story in order. Pictures appear one by one — this can take a minute.
-        </p>
+        {waiting ? (
+          <p className="mt-1 text-sm text-teal-900/70">
+            {message || "Drawing the story in order. Pictures appear one by one — this can take a minute."}
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-rose-700">
+            {isError
+              ? error instanceof Error
+                ? error.message
+                : "I couldn't load the story pictures."
+              : message || "I couldn't draw the story pictures."}
+          </p>
+        )}
         <Button className="mt-3" variant="outline" disabled={drawing} onClick={redraw}>
-          {drawing || isFetching ? "Drawing the story..." : "Draw the story now"}
+          {drawing ? "Drawing the story..." : waiting ? "Still drawing — try again" : "Draw the story now"}
         </Button>
       </Card>
     );
@@ -152,9 +198,17 @@ export function StoryIllustrations({
           {scenes.length} scenes
         </span>
       </div>
-      <p className="text-sm text-teal-900/70">
-        Follow the pictures in order. The highlighted one matches the part we are reading.
-      </p>
+      {status === "drawing" ? (
+        <p className="text-sm text-teal-900/70">
+          Follow the pictures in order. More scenes are still being drawn.
+        </p>
+      ) : status === "failed" || status === "unavailable" ? (
+        <p className="text-sm text-rose-700">{message}</p>
+      ) : (
+        <p className="text-sm text-teal-900/70">
+          Follow the pictures in order. The highlighted one matches the part we are reading.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {scenes.map((scene, i) => (
           <div

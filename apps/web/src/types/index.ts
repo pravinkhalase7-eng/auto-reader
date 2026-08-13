@@ -55,6 +55,15 @@ export type StoryIllustration = {
   provider: string;
 };
 
+export type IllustrationsStatus = "ready" | "drawing" | "unavailable" | "failed" | "idle";
+
+export type IllustrationsResponse = {
+  scenes: StoryIllustration[];
+  status: IllustrationsStatus;
+  message: string;
+  gemini_ready: number;
+};
+
 export type WordTiming = { word_id: string; start_ms: number; end_ms: number };
 
 export type AudioAsset = {

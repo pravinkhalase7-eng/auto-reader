@@ -22,6 +22,7 @@ from app.schemas import (
     GenerateAudioRequest,
     GenerateQuizRequest,
     IllustrationOut,
+    IllustrationsOut,
     JobOut,
     LessonCard,
     LessonContentOut,
@@ -99,11 +100,12 @@ async def _save_page_files(
 
 def _enqueue_illustrations(lesson_id: str) -> None:
     async def _draw() -> None:
-        from app.services.story_illustrations import draw_lesson_illustrations
+        from app.services.story_illustrations import MSG_FAILED, draw_lesson_illustrations, set_illustration_status
 
         try:
             await draw_lesson_illustrations(lesson_id)
         except Exception:
+            set_illustration_status(lesson_id, "failed", MSG_FAILED)
             logger.exception("illustrations_failed lesson_id=%s", lesson_id)
 
     task_queue.enqueue(_draw(), name=f"illustrate-{lesson_id}")
@@ -327,7 +329,7 @@ async def get_content(lesson_id: str, user: User = Depends(get_current_user), db
     )
 
 
-@router.get("/{lesson_id}/illustrations", response_model=list[IllustrationOut])
+@router.get("/{lesson_id}/illustrations", response_model=IllustrationsOut)
 async def get_illustrations(
     lesson_id: str,
     user: User = Depends(get_current_user),
@@ -338,16 +340,39 @@ async def get_illustrations(
     except AppError as exc:
         raise to_http_exception(exc) from exc
     from app.core.config import get_settings
-    from app.services.story_illustrations import illustration_in_progress, list_lesson_illustrations
+    from app.services.story_illustrations import (
+        illustration_in_progress,
+        list_lesson_illustrations,
+        public_illustration_status,
+        set_illustration_status,
+    )
 
     rows = await list_lesson_illustrations(db, lesson_id)
     gemini_count = sum(1 for row in rows if row.provider == "gemini")
-    if gemini_count < 4 and get_settings().google_ai_api_key and not illustration_in_progress(lesson_id):
-        _enqueue_illustrations(lesson_id)
-    return [IllustrationOut.model_validate(r) for r in rows]
+    has_key = bool(get_settings().google_ai_api_key)
+    status, message = public_illustration_status(lesson_id, gemini_count)
+    if status == "idle":
+        if has_key and not illustration_in_progress(lesson_id):
+            set_illustration_status(lesson_id, "drawing", message)
+            _enqueue_illustrations(lesson_id)
+            status, message = public_illustration_status(lesson_id, gemini_count)
+            if status == "idle":
+                status = "drawing"
+        else:
+            status = "unavailable"
+            message = (
+                "I can't draw story pictures on this server yet. "
+                "Add a Google AI key, then tap Draw the story now."
+            )
+    return IllustrationsOut(
+        scenes=[IllustrationOut.model_validate(r) for r in rows],
+        status=status,
+        message=message,
+        gemini_ready=gemini_count,
+    )
 
 
-@router.post("/{lesson_id}/illustrations", response_model=list[IllustrationOut])
+@router.post("/{lesson_id}/illustrations", response_model=IllustrationsOut)
 async def regenerate_illustrations(
     lesson_id: str,
     user: User = Depends(get_current_user),
@@ -359,14 +384,29 @@ async def regenerate_illustrations(
         raise to_http_exception(exc) from exc
     if lesson.is_demo and lesson.user_id != user.id:
         raise to_http_exception(ForbiddenError("You can redraw pictures on your own stories."))
+    if not get_settings().google_ai_api_key:
+        raise to_http_exception(AppError(FRIENDLY_MESSAGES["NO_GEMINI_KEY"], code="NO_GEMINI_KEY"))
     await db.commit()
-    from app.services.story_illustrations import draw_lesson_illustrations, list_lesson_illustrations
+    from app.services.story_illustrations import draw_lesson_illustrations, list_lesson_illustrations, public_illustration_status
 
     rows = await draw_lesson_illustrations(lesson_id, force=True)
     if not rows:
         async with AsyncSessionLocal() as session:
             rows = await list_lesson_illustrations(session, lesson_id)
-    return [IllustrationOut.model_validate(r) for r in rows]
+    gemini_count = sum(1 for row in rows if row.provider == "gemini")
+    status, message = public_illustration_status(lesson_id, gemini_count)
+    if status == "idle" and gemini_count < 4:
+        status = "failed"
+        message = (
+            "I couldn't draw the pictures this time. "
+            "Gemini may be busy or out of quota. Try again in a bit."
+        )
+    return IllustrationsOut(
+        scenes=[IllustrationOut.model_validate(r) for r in rows],
+        status=status,
+        message=message,
+        gemini_ready=gemini_count,
+    )
 
 
 @router.get("/{lesson_id}/jobs/{job_id}", response_model=JobOut)

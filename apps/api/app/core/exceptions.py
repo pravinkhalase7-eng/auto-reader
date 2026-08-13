@@ -41,4 +41,5 @@ FRIENDLY_MESSAGES = {
     "CANNOT_DELETE_DEMO": "That's a shared demo story — keep it for practice, or upload your own pages.",
     "QUIZ_FAILED": "I couldn't prepare questions just yet. Let's try again.",
     "UNSUPPORTED_LANGUAGE": "I'm still learning that language. English, Hindi, and Marathi work best for now.",
+    "NO_GEMINI_KEY": "I can't draw story pictures on this server yet. Add a Google AI key, then try again.",
 }

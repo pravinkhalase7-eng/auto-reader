@@ -130,6 +130,13 @@ class IllustrationOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class IllustrationsOut(BaseModel):
+    scenes: list[IllustrationOut] = []
+    status: str
+    message: str = ""
+    gemini_ready: int = 0
+
+
 class JobOut(BaseModel):
     id: str
     lesson_id: str
