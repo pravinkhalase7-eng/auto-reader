@@ -5,10 +5,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, ImageIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { StoryVideo } from "@/components/story-video";
 import { api, getToken } from "@/lib/api";
+import { sceneIndexForParagraph } from "@/lib/story-video";
 import { API_URL } from "@/lib/utils";
 import { useReaderStore } from "@/store/reader-store";
-import type { IllustrationsResponse, StoryIllustration } from "@/types";
+import type { IllustrationsResponse, LessonContent, StoryIllustration } from "@/types";
 
 const EMPTY_SCENES: StoryIllustration[] = [];
 const DRAWING_TIMEOUT_MS = 120_000;
@@ -45,19 +47,27 @@ export function useStoryIllustrationAssets(lessonId: string) {
     queryFn: async () =>
       normalizeIllustrations(await api<IllustrationsResponse | StoryIllustration[]>(`/lessons/${lessonId}/illustrations`)),
     enabled: !!lessonId,
-    refetchInterval: timedOut
-      ? false
-      : (query) => (query.state.data?.status === "drawing" ? 2000 : false),
+    refetchInterval: (query) => {
+      if (query.state.data?.status === "drawing") return timedOut ? 4000 : 2000;
+      return false;
+    },
   });
+
+  const geminiReady = data?.gemini_ready ?? 0;
+  const sceneKey = (data?.scenes ?? EMPTY_SCENES)
+    .filter((scene) => scene.provider === "gemini")
+    .map((scene) => scene.id)
+    .join(",");
 
   useEffect(() => {
     if (data?.status !== "drawing") {
       setTimedOut(false);
       return;
     }
+    setTimedOut(false);
     const timer = window.setTimeout(() => setTimedOut(true), DRAWING_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [data?.status, lessonId]);
+  }, [data?.status, geminiReady, sceneKey, lessonId]);
 
   const status = timedOut && data?.status === "drawing" ? "failed" : (data?.status ?? (isLoading ? "drawing" : "failed"));
   const message =
@@ -70,7 +80,7 @@ export function useStoryIllustrationAssets(lessonId: string) {
     [allScenes],
   );
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const sceneKey = scenes.map((scene) => scene.id).join(",");
+  const loadedSceneKey = scenes.map((scene) => scene.id).join(",");
 
   useEffect(() => {
     const created: string[] = [];
@@ -104,21 +114,12 @@ export function useStoryIllustrationAssets(lessonId: string) {
       cancelled = true;
       created.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [sceneKey, scenes]);
+  }, [loadedSceneKey, scenes]);
 
   return { scenes, urls, isLoading, isError, error, status, message, refetch };
 }
 
-export function sceneIndexForParagraph(
-  paragraphIndex: number,
-  paragraphCount: number,
-  sceneCount: number,
-) {
-  if (!sceneCount) return -1;
-  if (paragraphCount <= 1) return 0;
-  const ratio = paragraphIndex / Math.max(1, paragraphCount - 1);
-  return Math.min(sceneCount - 1, Math.max(0, Math.round(ratio * (sceneCount - 1))));
-}
+export { sceneIndexForParagraph } from "@/lib/story-video";
 
 export function StoryIllustrations({
   lessonId,
@@ -131,6 +132,11 @@ export function StoryIllustrations({
   const queryClient = useQueryClient();
   const { scenes, urls, isLoading, isError, error, status, message, refetch } =
     useStoryIllustrationAssets(lessonId);
+  const contentQuery = useQuery({
+    queryKey: ["content", lessonId],
+    queryFn: () => api<LessonContent>(`/lessons/${lessonId}/content`),
+    enabled: !!lessonId && scenes.length > 0,
+  });
   const [drawing, setDrawing] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
 
@@ -263,9 +269,19 @@ export function StoryIllustrations({
           </div>
         ))}
       </div>
-      <Button size="sm" variant="ghost" disabled={drawing} onClick={redraw}>
-        {drawing ? "Drawing the next pictures..." : "Redraw pictures"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        {contentQuery.data ? (
+          <StoryVideo
+            title={contentQuery.data.title}
+            content={contentQuery.data}
+            scenes={scenes}
+            urls={urls}
+          />
+        ) : null}
+        <Button size="sm" variant="ghost" disabled={drawing} onClick={redraw}>
+          {drawing ? "Drawing the next pictures..." : "Redraw pictures"}
+        </Button>
+      </div>
     </Card>
   );
 }
