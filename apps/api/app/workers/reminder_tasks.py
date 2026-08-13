@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.sync_database import SyncSessionLocal
-from app.models import Appointment, PhoneCall, Reminder, UserPreference
+from app.models import Appointment, Booking, PhoneCall, Reminder, UserPreference
 from app.repositories.reminder_repository import SyncReminderRepository
 from app.services.reminder_message import generate_reminder_speech
 from app.services.tts_service import TTSService
@@ -48,6 +48,20 @@ def _process(session: Session, reminder_id: str) -> str:
 
     logger.info("[REMINDER] id=%s status=processing", reminder.id)
     appointment = session.get(Appointment, reminder.appointment_id) if reminder.appointment_id else None
+    if appointment and appointment.status == "cancelled":
+        reminder.status = "cancelled"
+        reminder.cancelled_at = now_utc()
+        session.commit()
+        logger.info("[REMINDER] id=%s status=cancelled reason=appointment_cancelled", reminder.id)
+        return "cancelled"
+    if reminder.booking_id:
+        booking = session.get(Booking, reminder.booking_id)
+        if booking and booking.status == "cancelled":
+            reminder.status = "cancelled"
+            reminder.cancelled_at = now_utc()
+            session.commit()
+            logger.info("[REMINDER] id=%s status=cancelled reason=booking_cancelled", reminder.id)
+            return "cancelled"
     pref = session.scalar(select(UserPreference).where(UserPreference.user_id == reminder.user_id))
     language = reminder.language or (pref.preferred_language if pref else "en")
     spoken = generate_reminder_speech(reminder, appointment=appointment, language=language)

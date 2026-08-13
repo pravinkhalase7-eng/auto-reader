@@ -212,11 +212,11 @@ async def update_appointment(appointment_id: str, appointment_time: str = "", ti
         return _err(str(exc), getattr(exc, "code", "ERROR"))
 
 
-async def cancel_appointment(appointment_id: str) -> dict:
-    """Cancel an appointment."""
+async def cancel_appointment(appointment_id: str = "") -> dict:
+    """Cancel an appointment and its linked phone reminder. Empty id cancels the latest one."""
     try:
         row = await _svc_appt().cancel(appointment_id)
-        return _ok({"appointment_id": row.id, "status": row.status})
+        return _ok({"appointment_id": row.id, "status": row.status, "title": row.title})
     except Exception as exc:  # noqa: BLE001
         return _err(str(exc), getattr(exc, "code", "ERROR"))
 
@@ -277,13 +277,13 @@ async def update_booking(booking_id: str, booking_time: str = "", title: str = "
         return _err(str(exc), getattr(exc, "code", "ERROR"))
 
 
-async def cancel_booking(booking_id: str) -> dict:
-    """Cancel a booking."""
+async def cancel_booking(booking_id: str = "") -> dict:
+    """Cancel a booking and its linked phone reminder. Empty id cancels the latest one."""
     try:
         from app.services.appointment_service import BookingService
 
         row = await BookingService(pavi_db.get(), pavi_user.get()).cancel(booking_id)
-        return _ok({"booking_id": row.id, "status": row.status})
+        return _ok({"booking_id": row.id, "status": row.status, "title": row.title})
     except Exception as exc:  # noqa: BLE001
         return _err(str(exc), getattr(exc, "code", "ERROR"))
 

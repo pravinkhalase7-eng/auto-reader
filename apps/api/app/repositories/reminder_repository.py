@@ -5,7 +5,7 @@ from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.models import PaviIdempotencyKey, Reminder
+from app.models import Appointment, Booking, PaviIdempotencyKey, Reminder
 from app.utils.datetime import now_utc
 
 
@@ -36,6 +36,14 @@ class ReminderRepository:
         stmt: Select = select(Reminder).where(Reminder.user_id == user_id)
         if not include_cancelled:
             stmt = stmt.where(Reminder.status.notin_(["cancelled"]))
+        stmt = (
+            stmt.outerjoin(Appointment, Reminder.appointment_id == Appointment.id)
+            .outerjoin(Booking, Reminder.booking_id == Booking.id)
+            .where(
+                or_(Reminder.appointment_id.is_(None), Appointment.status != "cancelled"),
+                or_(Reminder.booking_id.is_(None), Booking.status != "cancelled"),
+            )
+        )
         if upcoming_only:
             stmt = stmt.where(
                 Reminder.status.in_(["pending", "scheduled"]),
@@ -46,7 +54,29 @@ class ReminderRepository:
         if end:
             stmt = stmt.where(Reminder.reminder_time_utc < end)
         stmt = stmt.order_by(Reminder.reminder_time_utc.asc()).limit(limit)
-        return list((await self.db.scalars(stmt)).all())
+        return list((await self.db.scalars(stmt)).unique().all())
+
+    async def cancel_active_linked(
+        self,
+        user_id: str,
+        *,
+        appointment_id: str | None = None,
+        booking_id: str | None = None,
+    ) -> int:
+        if not appointment_id and not booking_id:
+            return 0
+        conditions = [
+            Reminder.user_id == user_id,
+            Reminder.status.in_(["pending", "scheduled", "processing"]),
+        ]
+        if appointment_id:
+            conditions.append(Reminder.appointment_id == appointment_id)
+        else:
+            conditions.append(Reminder.booking_id == booking_id)
+        result = await self.db.execute(
+            update(Reminder).where(and_(*conditions)).values(status="cancelled", cancelled_at=now_utc())
+        )
+        return int(result.rowcount or 0)
 
     async def add(self, reminder: Reminder) -> Reminder:
         self.db.add(reminder)

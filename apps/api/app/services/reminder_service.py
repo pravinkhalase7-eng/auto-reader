@@ -158,9 +158,28 @@ class ReminderService:
         reminder = await self.get(reminder_id)
         reminder.status = "cancelled"
         reminder.cancelled_at = now_utc()
+        if reminder.appointment_id:
+            from app.models import Appointment
+
+            appt = await self.db.get(Appointment, reminder.appointment_id)
+            if appt and appt.user_id == self.user.id and appt.status != "cancelled":
+                appt.status = "cancelled"
+                appt.cancelled_at = now_utc()
+        if reminder.booking_id:
+            from app.models import Booking
+
+            booking = await self.db.get(Booking, reminder.booking_id)
+            if booking and booking.user_id == self.user.id and booking.status != "cancelled":
+                booking.status = "cancelled"
+                booking.cancelled_at = now_utc()
         await self.db.commit()
         await self.db.refresh(reminder)
         return reminder
+
+    async def cancel_linked(self, *, appointment_id: str | None = None, booking_id: str | None = None) -> int:
+        return await self.repo.cancel_active_linked(
+            self.user.id, appointment_id=appointment_id, booking_id=booking_id
+        )
 
     async def set_phone_call(self, reminder_id: str, enabled: bool, phone_number: str | None = None) -> Reminder:
         reminder = await self.get(reminder_id)

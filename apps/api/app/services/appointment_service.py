@@ -136,10 +136,16 @@ class AppointmentService:
         await self.db.refresh(row)
         return row
 
-    async def cancel(self, appointment_id: str) -> Appointment:
+    async def cancel(self, appointment_id: str = "") -> Appointment:
+        if not appointment_id:
+            rows = await self.list(upcoming_only=True) or await self.list()
+            if not rows:
+                raise NotFoundError("I couldn't find that appointment.")
+            appointment_id = rows[0].id
         row = await self.get(appointment_id)
         row.status = "cancelled"
         row.cancelled_at = now_utc()
+        await ReminderService(self.db, self.user).cancel_linked(appointment_id=row.id)
         await self.db.commit()
         await self.db.refresh(row)
         return row
@@ -218,10 +224,16 @@ class BookingService:
         await self.db.refresh(row)
         return row
 
-    async def cancel(self, booking_id: str) -> Booking:
+    async def cancel(self, booking_id: str = "") -> Booking:
+        if not booking_id:
+            rows = await self.list(upcoming_only=True) or await self.list()
+            if not rows:
+                raise NotFoundError("I couldn't find that booking.")
+            booking_id = rows[0].id
         row = await self.get(booking_id)
         row.status = "cancelled"
         row.cancelled_at = now_utc()
+        await ReminderService(self.db, self.user).cancel_linked(booking_id=row.id)
         await self.db.commit()
         await self.db.refresh(row)
         return row

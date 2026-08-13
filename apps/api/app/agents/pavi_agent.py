@@ -150,6 +150,8 @@ class PaviAgent:
 
     async def _run_mock(self, message: str, history: list[tuple[str, str]]) -> AgentResult:
         from app.agents.tools import (
+            cancel_appointment,
+            cancel_booking,
             cancel_reminder,
             create_appointment,
             create_reminder,
@@ -206,7 +208,22 @@ class PaviAgent:
                 header = f"You have {len(items)} reminder{'s' if len(items) != 1 else ''} tomorrow:"
             return AgentResult(text=header + "\n\n" + "\n".join(lines), tool_events=events)
 
-        if re.search(r"\b(cancel it|cancel that|delete it)\b", lower):
+        if re.search(r"\b(cancel|remove|delete)\b.{0,40}\b(appointment|booking)\b", lower) or re.search(
+            r"\b(appointment|booking)\b.{0,24}\b(cancel|remove|delete)\b", lower
+        ):
+            if "booking" in lower and "appointment" not in lower:
+                result = await cancel_booking()
+                events.append({"type": "tool_result", "name": "cancel_booking", "response": result})
+                kind = "booking"
+            else:
+                result = await cancel_appointment()
+                events.append({"type": "tool_result", "name": "cancel_appointment", "response": result})
+                kind = "appointment"
+            if result.get("success"):
+                return AgentResult(text=f"Done! I've cancelled that {kind} and the phone reminder.", tool_events=events)
+            return AgentResult(text=result.get("error") or FRIENDLY_DB_ERROR, tool_events=events)
+
+        if re.search(r"\b(cancel it|cancel that|delete it|remove it)\b", lower):
             result = await cancel_reminder()
             events.append({"type": "tool_result", "name": "cancel_reminder", "response": result})
             if result.get("success"):

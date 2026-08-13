@@ -213,6 +213,15 @@ async def test_create_appointment_with_offset(pavi_client):
     reminders = await pavi_client.get("/api/v1/reminders", headers=headers)
     assert reminders.status_code == 200
     assert len(reminders.json()) >= 1
+    aid = res.json()["id"]
+    cancelled = await pavi_client.delete(f"/api/v1/appointments/{aid}", headers=headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    leftover = await pavi_client.get("/api/v1/reminders/upcoming", headers=headers)
+    assert leftover.status_code == 200
+    assert leftover.json() == []
+    listed = await pavi_client.get("/api/v1/appointments", headers=headers)
+    assert listed.json() == []
 
 
 @pytest.mark.asyncio
