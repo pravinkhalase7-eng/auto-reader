@@ -390,9 +390,13 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           }
         }
         if (stopRef.current || runIdRef.current !== runId) return;
-        if (graph && graph.ctx.state === "suspended") await graph.ctx.resume();
+        if (!graph) {
+          setStatus("This browser could not open an audio recorder. Try Chrome or Edge.");
+          return;
+        }
+        if (audioState(graph.ctx) === "suspended") await graph.ctx.resume();
         try {
-          recorder = startRecorder(canvasRef.current, graph!.dest.stream);
+          recorder = startRecorder(canvasRef.current, graph.dest.stream);
         } catch (err) {
           setStatus(err instanceof Error ? err.message : "Could not start saving the video.");
           return;
@@ -421,18 +425,19 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
       }
 
       if (recorder && recorder.state !== "inactive") {
+        const activeRecorder = recorder;
         await new Promise((r) => window.setTimeout(r, 400));
         await new Promise<void>((resolve) => {
-          recorder.onstop = () => resolve();
+          activeRecorder.onstop = () => resolve();
           try {
-            if (recorder.state === "recording") recorder.requestData();
-            recorder.stop();
+            if (activeRecorder.state === "recording") activeRecorder.requestData();
+            activeRecorder.stop();
           } catch {
             resolve();
           }
         });
         if (chunks.length && !stopRef.current) {
-          const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+          const blob = new Blob(chunks, { type: activeRecorder.mimeType || "video/webm" });
           const name = `${fileSlug(title)}-${aspect.replace(":", "x")}.webm`;
           const url = offerDownload(blob, name);
           setReadyFile((prev) => {
