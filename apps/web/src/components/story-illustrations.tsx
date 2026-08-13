@@ -22,7 +22,7 @@ function normalizeIllustrations(raw: IllustrationsResponse | StoryIllustration[]
       message:
         geminiReady >= 4
           ? ""
-          : "Drawing the story in order. Pictures appear one by one — this can take a minute.",
+          : "Drawing all four pictures at once — they usually appear in about 20 seconds.",
       gemini_ready: geminiReady,
     };
   }
@@ -47,7 +47,7 @@ export function useStoryIllustrationAssets(lessonId: string) {
     enabled: !!lessonId,
     refetchInterval: timedOut
       ? false
-      : (query) => (query.state.data?.status === "drawing" ? 4000 : false),
+      : (query) => (query.state.data?.status === "drawing" ? 2000 : false),
   });
 
   useEffect(() => {
@@ -77,20 +77,22 @@ export function useStoryIllustrationAssets(lessonId: string) {
     let cancelled = false;
     async function load() {
       const next: Record<string, string> = {};
-      for (const scene of scenes) {
-        try {
-          const res = await fetch(`${API_URL}/storage/${scene.storage_key}`, {
-            headers: { Authorization: `Bearer ${getToken()}` },
-          });
-          if (!res.ok) continue;
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          created.push(url);
-          next[scene.id] = url;
-        } catch {
-          /* skip */
-        }
-      }
+      await Promise.all(
+        scenes.map(async (scene) => {
+          try {
+            const res = await fetch(`${API_URL}/storage/${scene.storage_key}`, {
+              headers: { Authorization: `Bearer ${getToken()}` },
+            });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            created.push(url);
+            next[scene.id] = url;
+          } catch {
+            /* skip */
+          }
+        }),
+      );
       if (!cancelled) setUrls(next);
     }
     if (scenes.length) {
@@ -171,9 +173,21 @@ export function StoryIllustrations({
       <Card>
         <p className="font-display text-lg font-semibold text-teal-950">Story pictures</p>
         {waiting ? (
-          <p className="mt-1 text-sm text-teal-900/70">
-            {message || "Drawing the story in order. Pictures appear one by one — this can take a minute."}
-          </p>
+          <>
+            <p className="mt-1 text-sm text-teal-900/70">
+              {message || "Drawing all four pictures at once — they usually appear in about 20 seconds."}
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[1, 2, 3, 4].map((n) => (
+                <div
+                  key={n}
+                  className="flex h-28 animate-pulse items-center justify-center rounded-2xl bg-teal-50 text-xs font-semibold text-teal-800/60"
+                >
+                  Picture {n}
+                </div>
+              ))}
+            </div>
+          </>
         ) : (
           <p className="mt-1 text-sm text-rose-700">
             {isError

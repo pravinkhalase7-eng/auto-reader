@@ -196,6 +196,65 @@ def test_illustration_status_reports_failure(monkeypatch):
     assert "quota" in message.lower()
 
 
+def test_illustration_status_stays_drawing_during_redraw(monkeypatch):
+    from app.services import story_illustrations as si
+
+    si._draw_status.clear()
+    monkeypatch.setattr(si, "get_settings", lambda: type("S", (), {"google_ai_api_key": "set"})())
+    si.set_illustration_status("lesson-1", "drawing", "Drawing all four pictures at once.")
+    status, _ = si.public_illustration_status("lesson-1", 4)
+    assert status == "drawing"
+
+
+async def test_illustration_scenes_draw_in_parallel(monkeypatch):
+    import asyncio
+    import time
+
+    from app.services import story_illustrations as si
+
+    started: list[float] = []
+
+    async def fake_image(*args, **kwargs):
+        started.append(time.monotonic())
+        await asyncio.sleep(0.25)
+        return b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
+
+    class FakeStorage:
+        async def save(self, key, data, content_type):
+            return key
+
+    monkeypatch.setattr(si, "generate_gemini_image", fake_image)
+    monkeypatch.setattr(si, "get_storage_provider", lambda: FakeStorage())
+    monkeypatch.setattr(
+        si,
+        "get_settings",
+        lambda: type("S", (), {"google_ai_api_key": "k", "gemini_image_model": "gemini-test"})(),
+    )
+
+    async def fake_plan(text, title, language, api_key):
+        return si.plan_scenes_local(text, title, language, max_scenes=4)
+
+    monkeypatch.setattr(si, "plan_scenes_gemini", fake_plan)
+
+    story = (
+        "The lion slept. The mouse ran. The lion woke. "
+        "The mouse helped. The lion was trapped. The mouse chewed the net."
+    )
+    t0 = time.monotonic()
+    prepared = await si._prepare_illustration_files(
+        "lesson-p",
+        "Lion",
+        "en",
+        story,
+        prefer_gemini=True,
+        persist_each=False,
+    )
+    elapsed = time.monotonic() - t0
+    assert len(prepared) == 4
+    assert elapsed < 0.7
+    assert max(started) - min(started) < 0.12
+
+
 def test_tesseract_data_filters_low_confidence():
     from app.providers.ocr import _text_from_tesseract_data
 

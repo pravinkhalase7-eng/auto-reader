@@ -98,12 +98,12 @@ async def _save_page_files(
     return lesson.page_count
 
 
-def _enqueue_illustrations(lesson_id: str) -> None:
+def _enqueue_illustrations(lesson_id: str, force: bool = False) -> None:
     async def _draw() -> None:
         from app.services.story_illustrations import MSG_FAILED, draw_lesson_illustrations, set_illustration_status
 
         try:
-            await draw_lesson_illustrations(lesson_id)
+            await draw_lesson_illustrations(lesson_id, force=force)
         except Exception:
             set_illustration_status(lesson_id, "failed", MSG_FAILED)
             logger.exception("illustrations_failed lesson_id=%s", lesson_id)
@@ -387,20 +387,21 @@ async def regenerate_illustrations(
     if not get_settings().google_ai_api_key:
         raise to_http_exception(AppError(FRIENDLY_MESSAGES["NO_GEMINI_KEY"], code="NO_GEMINI_KEY"))
     await db.commit()
-    from app.services.story_illustrations import draw_lesson_illustrations, list_lesson_illustrations, public_illustration_status
+    from app.services.story_illustrations import (
+        MSG_DRAWING,
+        list_lesson_illustrations,
+        public_illustration_status,
+        set_illustration_status,
+    )
 
-    rows = await draw_lesson_illustrations(lesson_id, force=True)
-    if not rows:
-        async with AsyncSessionLocal() as session:
-            rows = await list_lesson_illustrations(session, lesson_id)
+    set_illustration_status(lesson_id, "drawing", MSG_DRAWING)
+    _enqueue_illustrations(lesson_id, force=True)
+    rows = await list_lesson_illustrations(db, lesson_id)
     gemini_count = sum(1 for row in rows if row.provider == "gemini")
     status, message = public_illustration_status(lesson_id, gemini_count)
-    if status == "idle" and gemini_count < 4:
-        status = "failed"
-        message = (
-            "I couldn't draw the pictures this time. "
-            "Gemini may be busy or out of quota. Try again in a bit."
-        )
+    if status == "idle":
+        status = "drawing"
+        message = MSG_DRAWING
     return IllustrationsOut(
         scenes=[IllustrationOut.model_validate(r) for r in rows],
         status=status,
