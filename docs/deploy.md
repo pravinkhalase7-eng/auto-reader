@@ -24,6 +24,7 @@ This project follows the same Jenkins → Docker Compose pattern as **Option-Tra
    - `POSTGRES_PASSWORD` / matching `DATABASE_URL`
    - `CORS_ORIGINS=http://YOUR_VPS_IP:3000`
    - `NEXT_PUBLIC_API_URL=http://YOUR_VPS_IP:8000/api/v1`
+   - `GOOGLE_AI_API_KEY` (required for story pictures; not `GOOGLE_API_KEY`)
 5. Run the job. Optional parameters:
    - `SKIP_DEPLOY` — build + smoke only
    - `FORCE_RECREATE` — recreate containers

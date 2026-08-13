@@ -142,17 +142,57 @@ Then rebuild.''')
           }
 
           sh '''
+            set -e
+            # Windows CRLF / BOM from an uploaded Notepad file
+            tr -d '\\r' < .env.deploy | sed '1s/^\\xEF\\xBB\\xBF//' > .env.deploy.normalized
+            mv .env.deploy.normalized .env.deploy
+
+            env_val() {
+              grep -E "^[[:space:]]*${1}[[:space:]]*=" .env.deploy 2>/dev/null | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^["'\'']//;s/["'\'']$//' || true
+            }
+
+            # This app reads GOOGLE_AI_API_KEY. If the secret file used GOOGLE_API_KEY, copy it.
+            ai_key="$(env_val GOOGLE_AI_API_KEY)"
+            google_key="$(env_val GOOGLE_API_KEY)"
+            if [ -z "$ai_key" ] && [ -n "$google_key" ]; then
+              echo "Mapping GOOGLE_API_KEY → GOOGLE_AI_API_KEY"
+              if grep -qE '^[[:space:]]*GOOGLE_AI_API_KEY[[:space:]]*=' .env.deploy; then
+                sed -i.bak "s|^[[:space:]]*GOOGLE_AI_API_KEY[[:space:]]*=.*|GOOGLE_AI_API_KEY=${google_key}|" .env.deploy
+              else
+                echo "GOOGLE_AI_API_KEY=${google_key}" >> .env.deploy
+              fi
+            fi
+
+            if [ -n "${PUBLIC_API_URL}" ]; then
+              if grep -qE '^[[:space:]]*NEXT_PUBLIC_API_URL[[:space:]]*=' .env.deploy; then
+                sed -i.bak "s|^[[:space:]]*NEXT_PUBLIC_API_URL[[:space:]]*=.*|NEXT_PUBLIC_API_URL=${PUBLIC_API_URL}|" .env.deploy
+              else
+                echo "NEXT_PUBLIC_API_URL=${PUBLIC_API_URL}" >> .env.deploy
+              fi
+              echo "PUBLIC_API_URL applied: ${PUBLIC_API_URL}"
+            fi
+
             echo "=== .env.deploy key check (values hidden) ==="
             missing=0
-            for key in GOOGLE_API_KEY SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD EMAIL_FROM EMAIL_TO; do
-              val=$(grep -E "^${key}=" .env.deploy | head -n1 | cut -d= -f2- || true)
+            for key in SECRET_KEY DATABASE_URL NEXT_PUBLIC_API_URL CORS_ORIGINS GOOGLE_AI_API_KEY; do
+              val="$(env_val "$key")"
               if [ -n "$val" ]; then
                 echo "$key=SET"
               else
                 echo "$key=MISSING"
+                if [ "$key" != "GOOGLE_AI_API_KEY" ]; then
+                  missing=1
+                fi
               fi
             done
-           
+            if [ -z "$(env_val GOOGLE_AI_API_KEY)" ]; then
+              echo "WARN: GOOGLE_AI_API_KEY is empty — story pictures will not draw."
+              echo "Put GOOGLE_AI_API_KEY=... in the Jenkins secret file (not GOOGLE_API_KEY)."
+            fi
+            if [ "$missing" = "1" ]; then
+              echo "ERROR: required deploy keys are missing from the env file."
+              exit 1
+            fi
           '''
           echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
         }
