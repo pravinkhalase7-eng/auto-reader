@@ -197,6 +197,10 @@ Then rebuild.''')
               echo "ERROR: required deploy keys are missing from the env file."
               exit 1
             fi
+            echo "=== DATABASE_URL from .env.deploy (raw line) ==="
+            grep -E '^[[:space:]]*DATABASE_URL=' .env.deploy || true
+            echo "=== POSTGRES_PASSWORD from .env.deploy (raw line) ==="
+            grep -E '^[[:space:]]*POSTGRES_PASSWORD=' .env.deploy || true
           '''
           echo "Prepared .env.deploy for ${params.DEPLOY_ENV}"
         }
@@ -292,7 +296,14 @@ Then rebuild.''')
           . ./.env
           set +a
 
-          echo "Runtime check: SECRET_KEY=${SECRET_KEY:+SET} NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} POSTGRES_PASSWORD=${POSTGRES_PASSWORD:+SET len=${#POSTGRES_PASSWORD}}"
+          echo "=== DATABASE_URL after bash source ==="
+          echo "DATABASE_URL=${DATABASE_URL}"
+          echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+          echo "POSTGRES_PASSWORD_LEN=${#POSTGRES_PASSWORD}"
+          echo "=== .env file lines ==="
+          grep -E '^[[:space:]]*(DATABASE_URL|POSTGRES_PASSWORD|POSTGRES_USER|POSTGRES_DB)=' .env || true
+          echo "=== docker compose resolved env ==="
+          docker compose -f docker-compose.yml config | grep -E 'DATABASE_URL|POSTGRES_PASSWORD|POSTGRES_USER' || true
 
           echo "Freeing previous AI Teacher containers (if any)..."
           docker compose -f docker-compose.yml down --remove-orphans || true
@@ -348,6 +359,10 @@ Then rebuild.''')
 
           echo "Starting API and web from the images just built..."
           docker compose -f docker-compose.yml up -d --no-build --force-recreate api web
+          echo "=== aiteacher-api DATABASE_URL inside container ==="
+          docker exec aiteacher-api printenv DATABASE_URL || true
+          echo "=== aiteacher-postgres POSTGRES_PASSWORD inside container ==="
+          docker exec aiteacher-postgres printenv POSTGRES_PASSWORD || true
 
           echo "Waiting for API healthy (via docker exec — works with Jenkins-in-Docker)..."
           for i in $(seq 1 45); do

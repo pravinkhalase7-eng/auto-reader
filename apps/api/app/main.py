@@ -1,5 +1,6 @@
 import uuid
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,7 @@ setup_logging()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    logging.getLogger("app.main").info("DATABASE_URL=%s", settings.database_url)
     async with engine.begin() as conn:
         if "sqlite" in settings.database_url:
             await conn.execute(text("PRAGMA journal_mode=WAL"))
