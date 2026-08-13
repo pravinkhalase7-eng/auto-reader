@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "Home", icon: Home },
-  { href: "/pavi", label: "Pavi", icon: Sparkles },
+  { href: "/pavi", label: "पवी", icon: Sparkles },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/lessons", label: "Lessons", icon: BookOpen },
   { href: "/upload", label: "New story", icon: BookPlus },

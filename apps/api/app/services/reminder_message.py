@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.models import Appointment, Reminder
 from app.utils.datetime import from_utc
+from app.utils.pavi_name import canonicalize_pavi_spelling
 
 
 TEMPLATES = {
@@ -17,7 +18,7 @@ TEMPLATES = {
         "simple": "It's time to {title}.",
     },
     "hi": {
-        "hello": "नमस्ते, मैं पावी हूँ।",
+        "hello": "नमस्ते, मैं पवी हूँ।",
         "item": "आपकी {title} आज {time} बजे है।",
         "appointment": "मैं आपकी अपॉइंटमेंट के बारे में कॉल कर रही हूँ, {title}, {time} बजे।",
         "location": "यह {location} पर है।",
@@ -26,7 +27,7 @@ TEMPLATES = {
         "simple": "{title} का समय हो गया है।",
     },
     "mr": {
-        "hello": "नमस्कार, मी पावी आहे.",
+        "hello": "नमस्कार, मी पवी आहे.",
         "item": "तुमची {title} आज {time} वाजता आहे.",
         "appointment": "मी तुमच्या अपॉइंटमेंटबद्दल कॉल करत आहे, {title}, {time} वाजता.",
         "location": "ही {location} येथे आहे.",
@@ -54,7 +55,7 @@ def generate_reminder_speech(
 ) -> str:
     lang = (language or reminder.language or "en").split("-")[0]
     t = TEMPLATES.get(lang, TEMPLATES["en"])
-    title = reminder.title
+    title = canonicalize_pavi_spelling(reminder.title)
     time_label = _time_label(reminder, lang)
     location = appointment.location if appointment else None
     parts = [t["hello"]]

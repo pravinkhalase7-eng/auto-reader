@@ -11,6 +11,7 @@ from app.repositories.conversation_repository import PreferenceRepository
 from app.repositories.reminder_repository import ReminderRepository, operation_key
 from app.schemas.reminder import ReminderCreate, ReminderOut, ReminderUpdate
 from app.utils.datetime import format_local, now_utc, parse_iso_or_natural
+from app.utils.pavi_name import canonicalize_pavi_spelling
 from app.utils.phone import mask_phone, validate_phone
 
 ACTIVE = {"pending", "scheduled"}
@@ -83,7 +84,7 @@ class ReminderService:
 
         reminder = Reminder(
             user_id=self.user.id,
-            title=body.title.strip(),
+            title=canonicalize_pavi_spelling(body.title.strip()),
             description=body.description,
             reminder_time_utc=parsed.dt_utc,
             timezone=tz,
@@ -126,7 +127,7 @@ class ReminderService:
         pref = await self._prefs()
         tz = body.timezone or reminder.timezone
         if body.title is not None:
-            reminder.title = body.title.strip()
+            reminder.title = canonicalize_pavi_spelling(body.title.strip())
         if body.description is not None:
             reminder.description = body.description
         if body.reminder_time:

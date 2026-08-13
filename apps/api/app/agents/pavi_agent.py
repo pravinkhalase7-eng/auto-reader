@@ -116,7 +116,7 @@ class PaviAgent:
             name="pavi",
             model=model,
             instruction=instruction,
-            description="Pavi is a personal AI assistant for reminders, appointments, and phone call alerts.",
+            description="पवी (Pavi) is a personal AI assistant for reminders, appointments, and phone call alerts.",
             tools=PAVI_TOOLS,
         )
         session_service = InMemorySessionService()

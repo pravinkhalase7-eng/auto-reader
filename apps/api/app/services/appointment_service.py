@@ -13,6 +13,7 @@ from app.schemas.appointment import AppointmentCreate, AppointmentUpdate, Bookin
 from app.schemas.reminder import ReminderCreate
 from app.services.reminder_service import ReminderService, to_out as reminder_to_out
 from app.utils.datetime import format_local, now_utc, parse_iso_or_natural
+from app.utils.pavi_name import canonicalize_pavi_spelling
 from app.utils.phone import mask_phone
 
 
@@ -73,7 +74,7 @@ class AppointmentService:
             raise AppError("I couldn't understand the appointment time.", code="UNCLEAR_TIME")
         row = Appointment(
             user_id=self.user.id,
-            title=body.title.strip(),
+            title=canonicalize_pavi_spelling(body.title.strip()),
             description=body.description,
             appointment_time_utc=parsed.dt_utc,
             timezone=tz,
@@ -117,7 +118,7 @@ class AppointmentService:
         row = await self.get(appointment_id)
         tz = body.timezone or row.timezone
         if body.title is not None:
-            row.title = body.title.strip()
+            row.title = canonicalize_pavi_spelling(body.title.strip())
         if body.description is not None:
             row.description = body.description
         if body.appointment_time:
@@ -167,7 +168,7 @@ class BookingService:
             raise AppError("I couldn't understand the booking time.", code="UNCLEAR_TIME")
         row = Booking(
             user_id=self.user.id,
-            title=body.title.strip(),
+            title=canonicalize_pavi_spelling(body.title.strip()),
             description=body.description,
             booking_time_utc=parsed.dt_utc,
             timezone=tz,
@@ -209,7 +210,7 @@ class BookingService:
         row = await self.get(booking_id)
         tz = body.timezone or row.timezone
         if body.title is not None:
-            row.title = body.title.strip()
+            row.title = canonicalize_pavi_spelling(body.title.strip())
         if body.booking_time:
             parsed = parse_iso_or_natural(body.booking_time, timezone_name=tz)
             if not parsed:

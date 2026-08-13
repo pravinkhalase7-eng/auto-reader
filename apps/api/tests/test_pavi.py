@@ -13,6 +13,7 @@ from app.providers.voice.mock import MockVoiceProvider
 from app.services.twilio_service import TwilioVoiceService
 from app.utils.datetime import parse_natural_datetime, to_utc, from_utc, format_local
 from app.utils.phone import mask_phone, normalize_phone, validate_phone
+from app.utils.pavi_name import canonicalize_pavi_spelling
 from app.services.reminder_message import generate_reminder_speech
 from app.workers.reminder_tasks import _schedule_retry_or_fail
 
@@ -109,6 +110,27 @@ def test_reminder_speech_english():
     text = generate_reminder_speech(R())  # type: ignore[arg-type]
     assert "Pavi" in text
     assert "Doctor Appointment" in text
+
+
+def test_assistant_name_is_pavi_not_paavi():
+    assert canonicalize_pavi_spelling("Paavi") == "पवी"
+    assert canonicalize_pavi_spelling("पावी") == "पवी"
+    assert canonicalize_pavi_spelling("Call Paavi") == "Call पवी"
+    assert canonicalize_pavi_spelling("Pavi") == "Pavi"
+
+    class R:
+        title = "पावी"
+        language = "hi"
+        tzname = "Asia/Kolkata"
+        reminder_time_utc = datetime(2026, 8, 14, 4, 30, tzinfo=timezone.utc)
+
+        @property
+        def timezone(self) -> str:
+            return self.tzname
+
+    hindi = generate_reminder_speech(R(), language="hi")  # type: ignore[arg-type]
+    assert "पवी" in hindi
+    assert "पावी" not in hindi
 
 
 def test_retry_then_fail():

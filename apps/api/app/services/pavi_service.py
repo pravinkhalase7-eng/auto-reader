@@ -11,6 +11,7 @@ from app.schemas.pavi import ScheduleItem, UpcomingScheduleOut
 from app.services.reminder_service import ReminderService
 from app.services.appointment_service import AppointmentService
 from app.utils.datetime import format_local, from_utc, now_utc
+from app.utils.pavi_name import canonicalize_pavi_spelling
 
 
 class ConversationService:
@@ -30,7 +31,7 @@ class ConversationService:
             existing = await self.get(conversation_id)
             if existing:
                 return existing
-        title = first_message.strip().split("\n")[0][:80] or "New conversation"
+        title = canonicalize_pavi_spelling(first_message.strip().split("\n")[0][:80]) or "New conversation"
         row = Conversation(user_id=self.user.id, title=title)
         await self.repo.add_conversation(row)
         await self.db.commit()

@@ -122,7 +122,7 @@ export function PaviAssistant() {
         <header className="flex shrink-0 items-center gap-3 border-b border-teal-900/6 px-4 py-3 md:px-5">
           <PaviAvatar listening={listening} speaking={chat.isPending} size="md" />
           <div className="min-w-0 flex-1">
-            <p className="font-display text-lg font-semibold leading-tight text-teal-950">Pavi</p>
+            <p className="font-display text-lg font-semibold leading-tight text-teal-950">पवी</p>
             <p className="text-xs text-teal-800/60">
               {listening ? "Listening…" : chat.isPending ? "Thinking…" : "Your AI assistant"}
             </p>
@@ -151,7 +151,7 @@ export function PaviAssistant() {
           emptyState={
             <div className="mx-auto max-w-md text-center">
               <PaviAvatar listening={listening} speaking={chat.isPending} size="lg" />
-              <h1 className="font-display mt-5 text-3xl font-semibold text-teal-950">Hi, I&apos;m Pavi</h1>
+              <h1 className="font-display mt-5 text-3xl font-semibold text-teal-950">Hi, I&apos;m पवी</h1>
               <p className="mt-2 text-teal-800/70">How can I help you today? Times are in IST.</p>
               <div className="mt-8 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (
