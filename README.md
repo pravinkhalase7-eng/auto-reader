@@ -54,7 +54,10 @@ docker compose up --build
 - Web: http://localhost:3000  
 - API: http://localhost:8000  
 - Postgres: localhost:5432  
-- Redis: localhost:6379 (architecture-ready; MVP queue is in-process)
+- Redis: localhost:6379  
+- Celery worker + beat: Pavi reminder calls
+
+Pavi (personal AI assistant) lives at [http://localhost:3000/pavi](http://localhost:3000/pavi). Setup: [docs/pavi.md](docs/pavi.md).
 
 ---
 
@@ -139,7 +142,12 @@ source .venv/bin/activate
 pytest -q
 ```
 
-Critical coverage: auth, segmentation, language detection, word timing fallback, quiz generation/evaluation.
+Pavi coverage lives in `tests/test_pavi.py` (datetime, timezone, reminders, appointments, chat tools, TTS mock, Twilio mock, retries, duplicate prevention).
+
+```bash
+cd apps/web
+npm test
+```
 
 ---
 
