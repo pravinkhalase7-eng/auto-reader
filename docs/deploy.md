@@ -28,6 +28,7 @@ This project follows the same Jenkins → Docker Compose pattern as **Option-Tra
 5. Run the job. Optional parameters:
    - `SKIP_DEPLOY` — build + smoke only
    - `FORCE_RECREATE` — recreate containers
+   - `RESET_POSTGRES` — delete the Postgres volume (use once after `InvalidPasswordError`; wipes DB lessons)
    - `PUBLIC_API_URL` — override browser API URL for this build
 
 ## After deploy

@@ -24,6 +24,11 @@ pipeline {
       defaultValue: false,
       description: 'Force recreate containers on deploy'
     )
+    booleanParam(
+      name: 'RESET_POSTGRES',
+      defaultValue: false,
+      description: 'Delete Postgres data and start empty. Use once after password authentication failed (changing POSTGRES_PASSWORD does not update an existing volume). Wipes lessons in the DB.'
+    )
     string(
       name: 'PUBLIC_API_URL',
       defaultValue: 'http://187.127.138.86:8000/api/v1',
@@ -172,6 +177,23 @@ Then rebuild.''')
               echo "PUBLIC_API_URL applied: ${PUBLIC_API_URL}"
             fi
 
+            # Keep DATABASE_URL in lockstep with POSTGRES_* (Postgres ignores a new
+            # POSTGRES_PASSWORD if the data volume already exists).
+            pg_user="$(env_val POSTGRES_USER)"; pg_user="${pg_user:-aiteacher}"
+            pg_pass="$(env_val POSTGRES_PASSWORD)"
+            pg_db="$(env_val POSTGRES_DB)"; pg_db="${pg_db:-aiteacher}"
+            if [ -n "$pg_pass" ]; then
+              if command -v python3 >/dev/null 2>&1; then
+                encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$pg_pass")
+              else
+                encoded="$pg_pass"
+              fi
+              grep -vE '^[[:space:]]*DATABASE_URL[[:space:]]*=' .env.deploy > .env.deploy.tmp
+              echo "DATABASE_URL=postgresql+asyncpg://${pg_user}:${encoded}@postgres:5432/${pg_db}" >> .env.deploy.tmp
+              mv .env.deploy.tmp .env.deploy
+              echo "DATABASE_URL synced to POSTGRES_USER/PASSWORD/DB"
+            fi
+
             echo "=== .env.deploy key check (values hidden) ==="
             missing=0
             for key in SECRET_KEY DATABASE_URL NEXT_PUBLIC_API_URL CORS_ORIGINS GOOGLE_AI_API_KEY; do
@@ -203,16 +225,31 @@ Then rebuild.''')
 
     stage('Clean') {
       steps {
-        sh '''
-          set +e
-          echo "=== Clean previous AI Teacher containers/images (keep postgres data) ==="
-          docker compose -f docker-compose.yml down --remove-orphans || true
-          docker rm -f aiteacher-api aiteacher-web 2>/dev/null || true
-          docker rmi -f aiteacher-api:latest aiteacher-web:latest 2>/dev/null || true
-          docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/^aiteacher-api:|^aiteacher-web:/{print $2}' | sort -u | xargs -r docker rmi -f
-          echo "=== Remaining aiteacher images ==="
-          docker images | grep aiteacher || echo "(none)"
-        '''
+        script {
+          sh '''
+            set +e
+            echo "=== Stop previous AI Teacher containers ==="
+            docker compose -f docker-compose.yml down --remove-orphans || true
+            docker rm -f aiteacher-api aiteacher-web aiteacher-postgres aiteacher-redis 2>/dev/null || true
+            docker rmi -f aiteacher-api:latest aiteacher-web:latest 2>/dev/null || true
+            docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/^aiteacher-api:|^aiteacher-web:/{print $2}' | sort -u | xargs -r docker rmi -f
+            echo "=== Remaining aiteacher images ==="
+            docker images | grep aiteacher || echo "(none)"
+          '''
+          if (params.RESET_POSTGRES) {
+            sh '''
+              set +e
+              echo "RESET_POSTGRES=true — deleting Postgres volumes (DB lessons will be wiped)"
+              docker volume ls
+              docker volume ls --format '{{.Name}}' | grep -E 'aiteacher' | grep -E 'pgdata|postgres' | while read -r vol; do
+                echo "Removing volume ${vol}"
+                docker volume rm -f "${vol}" || true
+              done
+            '''
+          } else {
+            echo "Keeping Postgres volume. If login fails with InvalidPasswordError, rebuild with RESET_POSTGRES=true."
+          }
+        }
       }
     }
 
