@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_ai_api_key: str = ""
     google_cloud_api_key: str = ""
-    gemini_image_model: str = "gemini-3.1-flash-image"
+    gemini_image_model: str = "gemini-2.5-flash-image"
 
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""

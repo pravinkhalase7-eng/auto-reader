@@ -11,7 +11,7 @@ import { useReaderStore } from "@/store/reader-store";
 import type { IllustrationsResponse, StoryIllustration } from "@/types";
 
 const EMPTY_SCENES: StoryIllustration[] = [];
-const DRAWING_TIMEOUT_MS = 90_000;
+const DRAWING_TIMEOUT_MS = 120_000;
 
 function normalizeIllustrations(raw: IllustrationsResponse | StoryIllustration[]): IllustrationsResponse {
   if (Array.isArray(raw)) {

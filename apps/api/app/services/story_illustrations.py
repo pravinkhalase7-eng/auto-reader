@@ -36,9 +36,12 @@ TEXT_MODELS = (
 )
 
 IMAGE_MODELS = (
-    "gemini-3.1-flash-image",  # Nano Banana 2
-    "gemini-2.5-flash-image",
+    "gemini-2.5-flash-image",  # Nano Banana — fastest / most available
+    "gemini-3.1-flash-lite-image",
+    "gemini-3.1-flash-image",
 )
+DRAW_CONCURRENCY = 2
+IMAGE_TIMEOUT = httpx.Timeout(connect=10.0, read=50.0, write=20.0, pool=10.0)
 
 
 @dataclass
@@ -253,57 +256,62 @@ async def generate_gemini_image(
 ) -> bytes | None:
     del reference_png  # keep callsites stable; extra images make requests slow
     models: list[str] = []
-    for name in (preferred_model, *IMAGE_MODELS):
+    for name in (*IMAGE_MODELS, preferred_model):
         if name and name not in models:
             models.append(name)
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
     }
-    timeout = httpx.Timeout(connect=10.0, read=30.0, write=20.0, pool=5.0)
     owns_client = client is None
     if client is None:
-        client = httpx.AsyncClient(timeout=timeout)
+        client = httpx.AsyncClient(timeout=IMAGE_TIMEOUT)
     try:
         for model in models:
-            try:
-                resp = await client.post(
-                    _gemini_url(model),
-                    headers=_gemini_headers(api_key),
-                    json=body,
-                )
-            except httpx.TimeoutException:
-                logger.warning("gemini_image_timeout model=%s", model)
-                return None
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("gemini_image_failed model=%s err=%r", model, exc)
-                return None
-            if resp.status_code == 429:
-                logger.warning("gemini_image_quota model=%s", model)
-                await asyncio.sleep(1.2)
-                continue
-            if resp.status_code in {400, 404}:
-                detail = ""
+            for attempt in range(2):
                 try:
-                    detail = str(resp.json().get("error", {}).get("message") or "")[:180]
-                except Exception:
+                    resp = await client.post(
+                        _gemini_url(model),
+                        headers=_gemini_headers(api_key),
+                        json=body,
+                    )
+                except httpx.TimeoutException:
+                    logger.warning("gemini_image_timeout model=%s attempt=%s", model, attempt + 1)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("gemini_image_failed model=%s err=%r", model, exc)
+                    break
+                if resp.status_code in {429, 503}:
+                    logger.warning(
+                        "gemini_image_busy model=%s status=%s attempt=%s",
+                        model,
+                        resp.status_code,
+                        attempt + 1,
+                    )
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                if resp.status_code in {400, 404}:
                     detail = ""
-                logger.warning(
-                    "gemini_image_http model=%s status=%s detail=%s",
-                    model,
-                    resp.status_code,
-                    detail,
-                )
-                continue
-            if resp.status_code >= 400:
-                logger.warning("gemini_image_http model=%s status=%s", model, resp.status_code)
-                return None
-            image = _inline_image_bytes(resp.json())
-            if image:
-                logger.info("gemini_image_ok model=%s bytes=%s", model, len(image))
-                return image
-            logger.warning("gemini_image_no_bytes model=%s", model)
-            return None
+                    try:
+                        detail = str(resp.json().get("error", {}).get("message") or "")[:180]
+                    except Exception:
+                        detail = ""
+                    logger.warning(
+                        "gemini_image_http model=%s status=%s detail=%s",
+                        model,
+                        resp.status_code,
+                        detail,
+                    )
+                    break
+                if resp.status_code >= 400:
+                    logger.warning("gemini_image_http model=%s status=%s", model, resp.status_code)
+                    break
+                image = _inline_image_bytes(resp.json())
+                if image:
+                    logger.info("gemini_image_ok model=%s bytes=%s", model, len(image))
+                    return image
+                logger.warning("gemini_image_no_bytes model=%s", model)
+                break
     finally:
         if owns_client:
             await client.aclose()
@@ -364,27 +372,30 @@ async def _prepare_illustration_files(
     skip = skip_positions or set()
     total = len(scenes)
     pending = [scene for scene in scenes if scene.position not in skip]
-    timeout = httpx.Timeout(connect=10.0, read=30.0, write=20.0, pool=5.0)
     limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
-    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+    gate = asyncio.Semaphore(DRAW_CONCURRENCY)
+
+    async def _draw_limited(scene: ScenePlan):
+        async with gate:
+            return await _draw_one_scene(
+                lesson_id,
+                scene,
+                title,
+                total,
+                use_gemini=use_gemini,
+                persist_each=persist_each,
+                client=client,
+            )
+
+    async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT, limits=limits) as client:
         logger.info(
-            "illustration_draw_parallel lesson_id=%s scenes=%s",
+            "illustration_draw_parallel lesson_id=%s scenes=%s concurrency=%s",
             lesson_id,
             len(pending),
+            DRAW_CONCURRENCY,
         )
         results = await asyncio.gather(
-            *[
-                _draw_one_scene(
-                    lesson_id,
-                    scene,
-                    title,
-                    total,
-                    use_gemini=use_gemini,
-                    persist_each=persist_each,
-                    client=client,
-                )
-                for scene in pending
-            ],
+            *[_draw_limited(scene) for scene in pending],
             return_exceptions=True,
         )
     prepared: list[tuple[ScenePlan, str, str, str]] = []
