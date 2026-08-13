@@ -1,15 +1,17 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ApiError } from "@/lib/api";
 import { getPreferences, updatePreferences } from "@/lib/pavi-api";
 import { useRequireAuth } from "@/lib/use-require-auth";
 
 export default function SettingsPage() {
   const { ready } = useRequireAuth();
+  const queryClient = useQueryClient();
   const prefs = useQuery({ queryKey: ["pavi-prefs"], queryFn: getPreferences, enabled: ready });
   const [phone, setPhone] = useState("");
   const [timezone, setTimezone] = useState("Asia/Kolkata");
@@ -25,14 +27,24 @@ export default function SettingsPage() {
   }, [prefs.data]);
 
   const save = useMutation({
-    mutationFn: () =>
-      updatePreferences({
-        phone_number: phone || undefined,
+    mutationFn: () => {
+      const typed = phone.trim();
+      if (!typed && !prefs.data?.phone_number_masked) {
+        throw new ApiError("Enter a mobile number in E.164 format, for example +917219584184.");
+      }
+      return updatePreferences({
+        phone_number: typed || undefined,
         timezone,
         preferred_language: language,
         phone_call_enabled: calls,
-      }),
-    onSuccess: () => setSaved(true),
+      });
+    },
+    onSuccess: (data) => {
+      setSaved(true);
+      setPhone("");
+      queryClient.setQueryData(["pavi-prefs"], data);
+      queryClient.invalidateQueries({ queryKey: ["pavi-prefs"] });
+    },
   });
 
   function onSubmit(e: FormEvent) {
@@ -67,9 +79,14 @@ export default function SettingsPage() {
             />
           </label>
           {prefs.data?.phone_number_masked ? (
-            <p className="text-xs text-teal-800/60">Saved number: {prefs.data.phone_number_masked}. Type a new number only if you want to change it.</p>
+            <p className="text-xs text-teal-800/60">
+              Saved number: {prefs.data.phone_number_masked}. Leave the field empty to keep it, or type a new number to change it.
+            </p>
           ) : (
-            <p className="text-xs text-amber-800">Required for phone reminders. Use E.164, for example +917219584184.</p>
+            <p className="text-xs text-teal-800/60">Enter your number, then click Save. Example: +917219584184</p>
+          )}
+          {save.isError && (
+            <p className="text-sm text-rose-700">{save.error instanceof ApiError ? save.error.message : "Could not save settings."}</p>
           )}
           <label className="block text-sm font-medium text-teal-900">
             Timezone

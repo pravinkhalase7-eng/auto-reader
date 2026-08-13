@@ -35,7 +35,13 @@ class PreferenceService:
     async def update(self, body: PreferenceIn) -> UserPreference:
         pref = await self.get()
         if body.phone_number is not None:
-            pref.phone_number = validate_phone(body.phone_number) if body.phone_number.strip() else None
+            if body.phone_number.strip():
+                try:
+                    pref.phone_number = validate_phone(body.phone_number)
+                except ValueError as exc:
+                    raise AppError(str(exc), code="INVALID_PHONE") from exc
+            else:
+                pref.phone_number = None
         if body.phone_call_enabled is not None:
             pref.phone_call_enabled = body.phone_call_enabled
         if body.preferred_language:
