@@ -29,11 +29,15 @@ export function elevenLabsVoiceURI(id: string) {
   return `${ELEVENLABS_PREFIX}${id}`;
 }
 
+function enableInlinePlayback(audio: HTMLAudioElement) {
+  audio.setAttribute("playsinline", "true");
+}
+
 function getPlaybackAudio() {
   if (typeof window === "undefined") return null;
   if (!currentAudio) {
     currentAudio = new Audio();
-    currentAudio.playsInline = true;
+    enableInlinePlayback(currentAudio);
     currentAudio.preload = "auto";
   }
   return currentAudio;
@@ -44,7 +48,7 @@ export function primeElevenLabsPlayback() {
   if (typeof window === "undefined") return;
   const ping = new Audio(SILENT_WAV);
   ping.muted = true;
-  ping.playsInline = true;
+  enableInlinePlayback(ping);
   void ping.play().catch(() => undefined);
   const audio = getPlaybackAudio();
   if (!audio || (!audio.paused && audio.src.startsWith("blob:"))) return;
