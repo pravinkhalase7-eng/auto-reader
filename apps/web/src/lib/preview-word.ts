@@ -1,10 +1,12 @@
 import {
   elevenLabsVoiceId,
+  fetchElevenLabsVoices,
   playElevenLabsSpeech,
 } from "@/lib/elevenlabs";
 import {
   buildUtterance,
   cancelSpeech,
+  hasNativeVoice,
   speakableWord,
   waitForVoices,
 } from "@/lib/speech";
@@ -34,21 +36,35 @@ export async function previewWord(opts: {
   const word = speakableWord(opts.text);
   if (!word) return;
   const run = ++previewRun;
-  const elevenId = elevenLabsVoiceId(opts.preferredVoiceURI);
+  let elevenId = elevenLabsVoiceId(opts.preferredVoiceURI);
+  if (!elevenId && opts.language === "mr") {
+    const voices = await waitForVoices();
+    if (run !== previewRun) return;
+    if (!hasNativeVoice("mr", voices)) {
+      const result = await fetchElevenLabsVoices();
+      if (run !== previewRun) return;
+      elevenId = result.voices[0]?.id || "default";
+    }
+  }
   if (elevenId) {
-    await playElevenLabsSpeech({
-      text: word,
-      voiceId: elevenId,
-      speed: "slow",
-      language: opts.language,
-      volume: opts.volume,
-      isCancelled: () => run !== previewRun,
-    });
+    try {
+      await playElevenLabsSpeech({
+        text: word,
+        voiceId: elevenId,
+        speed: "slow",
+        language: opts.language,
+        volume: opts.volume,
+        isCancelled: () => run !== previewRun,
+      });
+    } catch {
+      /* Hover preview is best-effort. */
+    }
     return;
   }
   cancelSpeech();
   const voices = await waitForVoices();
   if (run !== previewRun) return;
+  if (opts.language === "mr" && !hasNativeVoice("mr", voices)) return;
   const { utterance } = buildUtterance(word, {
     language: opts.language,
     speed: "slow",

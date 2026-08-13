@@ -213,11 +213,85 @@ def test_elevenlabs_uses_v3_for_marathi():
     assert elevenlabs_model_for_language("hi", "eleven_multilingual_v2") == "eleven_multilingual_v2"
 
 
+def test_elevenlabs_does_not_fall_back_to_hindi_for_marathi():
+    from app.services.elevenlabs import elevenlabs_allows_model_fallback
+
+    assert elevenlabs_allows_model_fallback("mr") is False
+    assert elevenlabs_allows_model_fallback("hi") is True
+    assert elevenlabs_allows_model_fallback("en") is True
+
+
 def test_elevenlabs_disabled_without_key(monkeypatch):
     from app.services import elevenlabs as el
 
+    el.reset_elevenlabs_status()
     monkeypatch.setattr(el, "get_settings", lambda: type("S", (), {"elevenlabs_api_key": ""})())
     assert el.elevenlabs_enabled() is False
+
+
+def test_elevenlabs_strips_quoted_keys():
+    from app.services.elevenlabs import sanitize_secret
+
+    assert sanitize_secret('  "sk_abc"  ') == "sk_abc"
+    assert sanitize_secret("Bearer sk_abc") == "sk_abc"
+    assert sanitize_secret("sk_abc # comment") == "sk_abc"
+
+
+def test_elevenlabs_rejected_key_disables_provider(monkeypatch):
+    from app.services import elevenlabs as el
+
+    el.reset_elevenlabs_status()
+    el.mark_elevenlabs_key_rejected()
+    assert el.elevenlabs_enabled() is False
+    el.reset_elevenlabs_status()
+    monkeypatch.setattr(el, "get_settings", lambda: type("S", (), {"elevenlabs_api_key": "sk_test"})())
+    assert el.elevenlabs_enabled() is True
+
+
+def test_lesson_tts_uses_gemini_when_elevenlabs_key_rejected(monkeypatch):
+    from app.core.exceptions import AppError
+    from app.providers.pavi_tts.base import TTSAudio
+    from app.services import lesson_tts
+
+    async def boom(*_args, **_kwargs):
+        raise AppError("The ElevenLabs key on this server is not accepted.", code="ELEVENLABS_UNAUTHORIZED", status_code=502)
+
+    class FakeGemini:
+        async def synthesize(self, text, *, language="en", voice=None, speak_verbatim=False):
+            assert speak_verbatim is True
+            assert language == "mr"
+            return TTSAudio(audio_bytes=b"WAV", content_type="audio/wav", provider="gemini", voice="Kore", language="mr")
+
+    monkeypatch.setattr(lesson_tts, "elevenlabs_enabled", lambda: True)
+    monkeypatch.setattr(lesson_tts, "synthesize", boom)
+    monkeypatch.setattr(lesson_tts, "gemini_tts_available", lambda: True)
+    monkeypatch.setattr(lesson_tts, "GeminiTTSProvider", FakeGemini)
+
+    import asyncio
+
+    audio, content_type = asyncio.run(lesson_tts.speak_lesson("नमस्कार", "default", language="mr"))
+    assert audio == b"WAV"
+    assert content_type == "audio/wav"
+
+
+def test_lesson_tts_hides_key_error_when_gemini_missing(monkeypatch):
+    from app.core.exceptions import AppError
+    from app.services import lesson_tts
+
+    async def boom(*_args, **_kwargs):
+        raise AppError("The ElevenLabs key on this server is not accepted.", code="ELEVENLABS_UNAUTHORIZED", status_code=502)
+
+    monkeypatch.setattr(lesson_tts, "elevenlabs_enabled", lambda: True)
+    monkeypatch.setattr(lesson_tts, "synthesize", boom)
+    monkeypatch.setattr(lesson_tts, "gemini_tts_available", lambda: False)
+
+    import asyncio
+    import pytest
+
+    with pytest.raises(AppError) as exc:
+        asyncio.run(lesson_tts.speak_lesson("hello", "default", language="mr"))
+    assert exc.value.code == "TTS_UNAVAILABLE"
+    assert "not accepted" not in exc.value.message
 
 
 def test_elevenlabs_hides_library_voices():

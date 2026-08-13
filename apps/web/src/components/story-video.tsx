@@ -22,6 +22,7 @@ import {
 import {
   buildUtterance,
   cancelSpeech,
+  hasNativeVoice,
   waitForVoices,
 } from "@/lib/speech";
 import { useReaderStore } from "@/store/reader-store";
@@ -288,10 +289,18 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
         });
         return result === "ended" && !stopRef.current && runIdRef.current === runId ? "ended" : "stopped";
       } catch {
+        if (content.language === "mr") {
+          setStatus("Could not play a Marathi voice for this line.");
+          return "stopped";
+        }
         setStatus("ElevenLabs could not speak this line. Using this device instead.");
       }
     }
     const voices = await waitForVoices();
+    if (content.language === "mr" && !hasNativeVoice("mr", voices)) {
+      setStatus("This device has no Marathi voice, so Hindi will not be used.");
+      return "stopped";
+    }
     return new Promise<"ended" | "stopped">((resolve) => {
       const { utterance } = buildUtterance(text, {
         language: content.language,

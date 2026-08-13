@@ -26,10 +26,38 @@ TEACHER_VOICE_HINTS = ("alice", "george", "jessica", "matilda", "sarah", "lily")
 
 _voices_cache: tuple[float, list[dict[str, str]]] | None = None
 CACHE_SECONDS = 300
+_key_rejected = False
+
+
+def sanitize_secret(raw: str) -> str:
+    key = (raw or "").strip().strip('"').strip("'")
+    if key.lower().startswith("bearer "):
+        key = key[7:].strip()
+    key = key.split("#", 1)[0].strip()
+    return key.split()[0] if key else ""
+
+
+def reset_elevenlabs_status() -> None:
+    global _key_rejected, _voices_cache
+    _key_rejected = False
+    _voices_cache = None
+
+
+def mark_elevenlabs_key_rejected() -> None:
+    global _key_rejected, _voices_cache
+    _key_rejected = True
+    _voices_cache = None
+    logger.warning("elevenlabs_key_rejected — lesson reading will use Gemini instead")
+
+
+def _api_key() -> str:
+    return sanitize_secret(get_settings().elevenlabs_api_key)
 
 
 def elevenlabs_enabled() -> bool:
-    return bool(get_settings().elevenlabs_api_key.strip())
+    if _key_rejected:
+        return False
+    return bool(_api_key())
 
 
 def elevenlabs_speed(speed: str) -> float:
@@ -48,6 +76,11 @@ def elevenlabs_model_for_language(language: str, configured: str = "") -> str:
     if key == "mr":
         return "eleven_v3"
     return configured or "eleven_multilingual_v2"
+
+
+def elevenlabs_allows_model_fallback(language: str) -> bool:
+    """Do not fall back to multilingual v2 for Marathi — it would pronounce Hindi."""
+    return (language or "en").split("-")[0].lower() != "mr"
 
 
 def _speak_body(text: str, model: str, speed: str, language_code: str | None) -> dict[str, object]:
@@ -89,7 +122,8 @@ def prefer_teacher_voices(rows: list[dict[str, str]]) -> list[dict[str, str]]:
 
 def elevenlabs_error_message(status: int, detail: str) -> tuple[str, str]:
     text = (detail or "").lower()
-    if status == 401 or "invalid api key" in text or "missing api key" in text:
+    if status == 401 or status == 403 or "invalid api key" in text or "missing api key" in text:
+        mark_elevenlabs_key_rejected()
         return (
             "The ElevenLabs key on this server is not accepted. Check ELEVENLABS_API_KEY, then try again.",
             "ELEVENLABS_UNAUTHORIZED",
@@ -111,7 +145,7 @@ def elevenlabs_error_message(status: int, detail: str) -> tuple[str, str]:
 
 
 def _headers() -> dict[str, str]:
-    key = get_settings().elevenlabs_api_key.strip()
+    key = _api_key()
     if not key:
         raise AppError(
             "ElevenLabs is not set up on this server yet. Add ELEVENLABS_API_KEY, then try again.",
@@ -145,6 +179,8 @@ async def list_voices() -> list[dict[str, str]]:
             resp = await client.get(VOICES_URL, headers=_headers())
         if resp.status_code >= 400:
             logger.warning("elevenlabs_voices_http status=%s", resp.status_code)
+            if resp.status_code in {401, 403}:
+                mark_elevenlabs_key_rejected()
             return []
         rows = []
         for item in resp.json().get("voices") or []:
@@ -199,7 +235,7 @@ async def synthesize(text: str, voice_id: str, *, speed: str = "normal", languag
     primary_model = elevenlabs_model_for_language(language, settings.elevenlabs_model)
     fallback_model = settings.elevenlabs_model or "eleven_multilingual_v2"
     attempts = [_speak_body(clean, primary_model, speed, lang_code)]
-    if primary_model != fallback_model:
+    if elevenlabs_allows_model_fallback(language) and primary_model != fallback_model:
         attempts.append(_speak_body(clean, fallback_model, speed, None))
     resp: httpx.Response | None = None
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=20.0, pool=10.0)) as client:

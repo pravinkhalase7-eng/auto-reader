@@ -24,7 +24,14 @@ def pcm16_to_wav(pcm: bytes, sample_rate: int = 24000) -> bytes:
 
 
 class GeminiTTSProvider(TTSProvider):
-    async def synthesize(self, text: str, *, language: str = "en", voice: str | None = None) -> TTSAudio:
+    async def synthesize(
+        self,
+        text: str,
+        *,
+        language: str = "en",
+        voice: str | None = None,
+        speak_verbatim: bool = False,
+    ) -> TTSAudio:
         settings = get_settings()
         api_key = settings.resolved_gemini_api_key
         if not api_key:
@@ -47,7 +54,11 @@ class GeminiTTSProvider(TTSProvider):
                 ),
             ),
         )
-        spoken = text if text.lower().startswith("say ") else f"Say this in a warm, natural speaking voice: {text}"
+        spoken = (
+            text
+            if speak_verbatim or text.lower().startswith("say ")
+            else f"Say this in a warm, natural speaking voice: {text}"
+        )
         models = [settings.gemini_tts_model, "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
         last_error: Exception | None = None
         response = None

@@ -81,7 +81,8 @@ export function cancelElevenLabsAudio() {
 export async function fetchElevenLabsVoices(): Promise<{ enabled: boolean; voices: ElevenLabsVoice[] }> {
   try {
     const data = await api<{ elevenlabs: boolean; voices: ElevenLabsVoice[] }>("/tts/voices");
-    return { enabled: data.elevenlabs, voices: data.voices || [] };
+    const voices = data.voices || [];
+    return { enabled: Boolean(data.elevenlabs || voices.length), voices };
   } catch {
     return { enabled: false, voices: [] };
   }

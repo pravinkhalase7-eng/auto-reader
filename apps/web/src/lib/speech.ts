@@ -21,7 +21,8 @@ const PAUSE_SCALE: Record<SpeechSpeed, number> = {
 const LANG_CANDIDATES: Record<string, string[]> = {
   en: ["en-IN", "en-GB", "en-US", "en"],
   hi: ["hi-IN", "hi"],
-  mr: ["mr-IN", "mr", "hi-IN", "hi"],
+  // Never fall back to Hindi for Marathi — Hindi TTS will not sound like मराठी.
+  mr: ["mr-IN", "mr"],
 };
 
 const NATURAL_NAME =
@@ -191,10 +192,10 @@ export function scoreVoice(voice: SpeechSynthesisVoice, wanted: string[]): numbe
   if (ROBOTIC_NAME.test(vName)) score -= 90;
 
   const primary = wanted[0]?.split("-")[0];
+  if (primary === "mr" && vLang.startsWith("hi")) return 0;
   if (primary === "mr" && vLang.startsWith("mr")) score += 80;
   if (primary && primary !== "en" && vLang.startsWith("en")) score -= 80;
   if ((primary === "hi" || primary === "mr") && vLang.startsWith("en")) score -= 40;
-  if (primary === "mr" && vLang.startsWith("hi")) score -= 25;
 
   return score;
 }
@@ -274,12 +275,9 @@ export function pickVoice(
   let warning: string | undefined;
   if (key === "mr") {
     const hasMr = voices.some((v) => inferredLang(v).startsWith("mr"));
-    if (!hasMr && best && inferredLang(best).startsWith("hi")) {
+    if (!hasMr) {
       warning =
-        "This device has no Marathi voice — Hindi is standing in, so pronunciation will not sound like मराठी. Use ElevenLabs for clear Marathi.";
-    } else if (!hasMr && (!best || inferredLang(best).startsWith("en"))) {
-      warning =
-        "No Marathi voice on this device. Use ElevenLabs, or add मराठी in Chrome at chrome://settings/languages.";
+        "This device has no Marathi voice. A Marathi cloud voice will be used so pronunciation sounds like मराठी.";
     }
   } else if (key === "hi" && (!best || inferredLang(best).startsWith("en"))) {
     warning =

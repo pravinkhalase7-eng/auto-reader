@@ -144,6 +144,7 @@ export function ReadingPlayer({
 
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [hasDeviceMarathi, setHasDeviceMarathi] = useState(false);
   const [elevenVoices, setElevenVoices] = useState<ElevenLabsVoice[]>([]);
   const [elevenEnabled, setElevenEnabled] = useState(false);
 
@@ -158,28 +159,28 @@ export function ReadingPlayer({
     let cancelled = false;
     skipElevenRef.current = false;
     setVoiceWarning(null);
-    setPreferredVoiceURI(null);
+    if (content.language === "mr") {
+      setPreferredVoiceURI(elevenLabsVoiceURI("default"));
+    } else {
+      setPreferredVoiceURI(null);
+    }
     waitForVoices().then((voices) => {
       if (cancelled) return;
+      const nativeMr = hasNativeVoice("mr", voices);
+      setHasDeviceMarathi(nativeMr);
       setAvailableVoices(voicesForLanguage(content.language, voices));
     });
     fetchElevenLabsVoices().then((result) => {
       if (cancelled) return;
       setElevenEnabled(result.enabled);
       setElevenVoices(result.voices);
-      if (!result.enabled) {
-        setVoiceWarning("ElevenLabs voices did not load. Refresh the page.");
-        return;
-      }
-      if (content.language !== "mr" || !result.voices.length) return;
+      if (content.language !== "mr") return;
       waitForVoices().then((voices) => {
         if (cancelled) return;
         if (hasNativeVoice("mr", voices)) return;
         skipElevenRef.current = false;
-        setPreferredVoiceURI(elevenLabsVoiceURI(result.voices[0].id));
-        setVoiceWarning(
-          "This device has no Marathi voice. ElevenLabs is selected so मराठी is pronounced clearly. Hover a word, or click it, to hear it.",
-        );
+        const voiceId = result.voices[0]?.id || "default";
+        setPreferredVoiceURI(elevenLabsVoiceURI(voiceId));
       });
     });
     return () => {
@@ -231,16 +232,30 @@ export function ReadingPlayer({
             isCancelled: () => cancelledRef.current,
           });
         } catch (err) {
-          skipElevenRef.current = true;
-          const message =
-            err instanceof ApiError || err instanceof Error
+          const unauthorized =
+            err instanceof ApiError &&
+            (err.code === "ELEVENLABS_UNAUTHORIZED" || /key on this server is not accepted/i.test(err.message));
+          const message = unauthorized
+            ? "The extra ElevenLabs voice isn't available. Using a Marathi cloud voice instead."
+            : err instanceof ApiError || err instanceof Error
               ? err.message
-              : "I couldn't use the ElevenLabs voice this time.";
+              : "I couldn't use the Marathi cloud voice this time.";
+          if (content.language === "mr" || unauthorized) {
+            setVoiceWarning(message);
+            return "error";
+          }
+          skipElevenRef.current = true;
           setVoiceWarning(`${message} Using this device instead.`);
         }
       }
       if (typeof window === "undefined" || !window.speechSynthesis) return "error";
       const browserVoices = voices.length ? voices : await waitForVoices();
+      if (content.language === "mr" && !hasNativeVoice("mr", browserVoices)) {
+        setVoiceWarning(
+          "This device has no Marathi voice. Choose Marathi voice so pronunciation sounds like मराठी.",
+        );
+        return "error";
+      }
       return new Promise<"ended" | "error" | "interrupted">((resolve) => {
         const { utterance, warning } = buildUtterance(text, {
           language: content.language,
@@ -646,19 +661,21 @@ export function ReadingPlayer({
 
       <p className="mb-1 text-xs font-semibold text-teal-800/80">Voice</p>
       <div className="mb-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            stopAll();
-            setPreferredVoiceURI(availableVoices[0]?.voiceURI ?? null);
-          }}
-          className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-semibold",
-            !isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
-          )}
-        >
-          This device
-        </button>
+        {content.language !== "mr" || hasDeviceMarathi ? (
+          <button
+            type="button"
+            onClick={() => {
+              stopAll();
+              setPreferredVoiceURI(availableVoices[0]?.voiceURI ?? null);
+            }}
+            className={cn(
+              "rounded-full px-3 py-1.5 text-xs font-semibold",
+              !isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
+            )}
+          >
+            This device
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => {
@@ -673,7 +690,7 @@ export function ReadingPlayer({
             isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
           )}
         >
-          ElevenLabs
+          {content.language === "mr" ? "Marathi voice" : "ElevenLabs"}
         </button>
       </div>
       {isElevenLabsVoice(preferredVoiceURI) && elevenVoices.length > 1 ? (
@@ -699,7 +716,7 @@ export function ReadingPlayer({
           </select>
           <span className="text-xs font-normal text-teal-800/70">
             {content.language === "mr"
-              ? "ElevenLabs v3 reads मराठी. Classroom voices work with a free key."
+              ? "Cloud Marathi voice — this phone’s Hindi voice will not be used."
               : "Classroom voices that work with a free ElevenLabs key. Voice Library voices need a paid plan."}
           </span>
         </label>
@@ -724,9 +741,14 @@ export function ReadingPlayer({
           </select>
         </label>
       ) : null}
-      {!elevenEnabled ? (
+      {!elevenEnabled && content.language !== "mr" ? (
         <p className="mb-3 text-xs text-amber-800">
           ElevenLabs did not load. Refresh this page after the API has the key.
+        </p>
+      ) : null}
+      {content.language === "mr" && !hasDeviceMarathi && isElevenLabsVoice(preferredVoiceURI) ? (
+        <p className="mb-3 text-xs text-teal-800/70">
+          This phone has Hindi, not Marathi. Reading with a Marathi cloud voice.
         </p>
       ) : null}
 
