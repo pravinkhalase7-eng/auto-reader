@@ -78,6 +78,14 @@ async function loadImage(url: string): Promise<HTMLImageElement> {
   return image;
 }
 
+function audioState(ctx: AudioContext): string {
+  return ctx.state as string;
+}
+
+function isAudioClosed(ctx: AudioContext): boolean {
+  return audioState(ctx) === "closed";
+}
+
 function createAudioGraph(volume: number): AudioGraph {
   const Ctor =
     window.AudioContext ||
@@ -100,11 +108,11 @@ async function playThroughGraph(
   blob: Blob,
   isCancelled: () => boolean,
 ): Promise<"ended" | "stopped"> {
-  if (graph.closed || graph.ctx.state === "closed") return "stopped";
+  if (graph.closed || isAudioClosed(graph.ctx)) return "stopped";
   const data = (await blob.arrayBuffer()).slice(0);
-  if (graph.closed || graph.ctx.state === "closed" || isCancelled()) return "stopped";
+  if (graph.closed || isAudioClosed(graph.ctx) || isCancelled()) return "stopped";
   const buffer = await graph.ctx.decodeAudioData(data);
-  if (graph.closed || graph.ctx.state === "closed" || isCancelled()) return "stopped";
+  if (graph.closed || isAudioClosed(graph.ctx) || isCancelled()) return "stopped";
   if (graph.ctx.state === "suspended") await graph.ctx.resume();
   const src = graph.ctx.createBufferSource();
   src.buffer = buffer;
@@ -185,7 +193,7 @@ function closeAudioGraph(graph: AudioGraph | null) {
   }
   graph.source = null;
   try {
-    if (graph.ctx.state !== "closed") {
+    if (!isAudioClosed(graph.ctx)) {
       void graph.ctx.close().catch(() => undefined);
     }
   } catch {
@@ -468,7 +476,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     if (!playing) return;
     pausedRef.current = !pausedRef.current;
     const ctx = graphRef.current?.ctx;
-    if (ctx && ctx.state !== "closed") {
+    if (ctx && !isAudioClosed(ctx)) {
       if (pausedRef.current) void ctx.suspend().catch(() => undefined);
       else void ctx.resume().catch(() => undefined);
     } else if (pausedRef.current) {
