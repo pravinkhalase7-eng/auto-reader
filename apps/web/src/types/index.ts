@@ -52,6 +52,7 @@ export type StoryIllustration = {
   position: number;
   caption: string;
   storage_key: string;
+  portrait_storage_key?: string | null;
   provider: string;
 };
 

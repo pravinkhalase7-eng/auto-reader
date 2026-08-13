@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     google_ai_api_key: str = ""
     google_cloud_api_key: str = ""
     gemini_image_model: str = "gemini-2.5-flash-image"
+    elevenlabs_api_key: str = ""
+    elevenlabs_model: str = "eleven_multilingual_v2"
+    elevenlabs_voice_id: str = "Xb7hH8MSUJpSbSDYk0k2"  # Alice — premade classroom voice
 
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""

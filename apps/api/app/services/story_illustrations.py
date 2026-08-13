@@ -25,7 +25,8 @@ from app.utils.segmentation import split_sentences
 logger = logging.getLogger(__name__)
 
 STYLE_PREFIX = (
-    "Children's storybook watercolor, bright and kind, no text in the image."
+    "Children's storybook watercolor, bright and kind. "
+    "Do not draw any letters, words, titles, captions, signs, labels, or readable writing."
 )
 
 TEXT_MODELS = (
@@ -171,6 +172,8 @@ def render_placeholder_png(
     total: int,
     title: str,
     visual: str = "",
+    width: int = 1024,
+    height: int = 640,
 ) -> bytes:
     """Story-shaped picture so each scene looks different when Gemini image quota is unavailable."""
     text = f"{title} {caption} {visual}".lower()
@@ -253,13 +256,22 @@ async def generate_gemini_image(
     preferred_model: str,
     reference_png: bytes | None = None,
     client: httpx.AsyncClient | None = None,
+    aspect_ratio: str = "16:9",
 ) -> bytes | None:
     del reference_png  # keep callsites stable; extra images make requests slow
     models: list[str] = []
     for name in (*IMAGE_MODELS, preferred_model):
         if name and name not in models:
             models.append(name)
+    ratio = aspect_ratio if aspect_ratio in {"16:9", "9:16", "1:1", "4:3", "3:4"} else "16:9"
     body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": {"aspectRatio": ratio},
+        },
+    }
+    body_plain = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
     }
@@ -268,12 +280,13 @@ async def generate_gemini_image(
         client = httpx.AsyncClient(timeout=IMAGE_TIMEOUT)
     try:
         for model in models:
+            request_body = body
             for attempt in range(2):
                 try:
                     resp = await client.post(
                         _gemini_url(model),
                         headers=_gemini_headers(api_key),
-                        json=body,
+                        json=request_body,
                     )
                 except httpx.TimeoutException:
                     logger.warning("gemini_image_timeout model=%s attempt=%s", model, attempt + 1)
@@ -302,13 +315,21 @@ async def generate_gemini_image(
                         resp.status_code,
                         detail,
                     )
+                    if request_body is body and resp.status_code == 400:
+                        request_body = body_plain
+                        continue
                     break
                 if resp.status_code >= 400:
                     logger.warning("gemini_image_http model=%s status=%s", model, resp.status_code)
                     break
                 image = _inline_image_bytes(resp.json())
                 if image:
-                    logger.info("gemini_image_ok model=%s bytes=%s", model, len(image))
+                    logger.info(
+                        "gemini_image_ok model=%s aspect=%s bytes=%s",
+                        model,
+                        ratio,
+                        len(image),
+                    )
                     return image
                 logger.warning("gemini_image_no_bytes model=%s", model)
                 break
@@ -318,18 +339,53 @@ async def generate_gemini_image(
     return None
 
 
-def image_prompt(scene: ScenePlan, title: str, total: int, has_previous: bool = False) -> str:
+def letterbox_png(png: bytes, width: int, height: int, fill: tuple[int, int, int] = (4, 47, 46)) -> bytes:
+    """Fit the drawing onto an exact frame without cropping characters."""
+    try:
+        img = Image.open(io.BytesIO(png)).convert("RGB")
+    except Exception:
+        return png
+    scale = min(width / img.width, height / img.height)
+    nw = max(1, int(img.width * scale))
+    nh = max(1, int(img.height * scale))
+    resized = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), fill)
+    canvas.paste(resized, ((width - nw) // 2, (height - nh) // 2))
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def image_prompt(
+    scene: ScenePlan,
+    title: str,
+    total: int,
+    has_previous: bool = False,
+    aspect_ratio: str = "16:9",
+) -> str:
     continuity = (
         " Keep the same characters, clothing, faces, and watercolor style as the previous picture. "
         "Draw the next moment, not a copy of the last picture."
         if has_previous
         else ""
     )
+    if aspect_ratio == "9:16":
+        frame = (
+            "Compose a tall 9:16 phone portrait picture. Show full characters from head to toe. "
+            "Fill the vertical frame. Do not crop faces or bodies."
+        )
+    else:
+        frame = (
+            "Compose a wide 16:9 landscape picture. Show the full scene from left to right. "
+            "Do not crop faces or bodies."
+        )
     return (
         f"{STYLE_PREFIX} "
         f"Story title: {title}. "
         f"Keep these characters identical in every frame: {scene.characters}. "
         f"This is picture {scene.position + 1} of {total}, in sequence.{continuity} "
+        f"{frame} "
+        f"Draw only the scene. Do not write a heading or caption on the picture. "
         f"Draw: {scene.visual}"
     )
 
@@ -343,7 +399,8 @@ async def _prepare_illustration_files(
     prefer_gemini: bool,
     persist_each: bool = False,
     skip_positions: set[int] | None = None,
-) -> list[tuple[ScenePlan, str, str, str]]:
+    reuse_landscape: dict[int, str] | None = None,
+) -> list[tuple[ScenePlan, str, str, str, str]]:
     settings = get_settings()
     story = (story or "").strip()
     if not story:
@@ -370,6 +427,7 @@ async def _prepare_illustration_files(
         scenes = plan_scenes_local(story, title, language)
 
     skip = skip_positions or set()
+    reuse = reuse_landscape or {}
     total = len(scenes)
     pending = [scene for scene in scenes if scene.position not in skip]
     limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
@@ -385,6 +443,7 @@ async def _prepare_illustration_files(
                 use_gemini=use_gemini,
                 persist_each=persist_each,
                 client=client,
+                reuse_landscape_key=reuse.get(scene.position),
             )
 
     async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT, limits=limits) as client:
@@ -398,7 +457,7 @@ async def _prepare_illustration_files(
             *[_draw_limited(scene) for scene in pending],
             return_exceptions=True,
         )
-    prepared: list[tuple[ScenePlan, str, str, str]] = []
+    prepared: list[tuple[ScenePlan, str, str, str, str]] = []
     for item in results:
         if isinstance(item, Exception):
             logger.warning("illustration_scene_failed err=%r", item)
@@ -421,34 +480,73 @@ async def _draw_one_scene(
     use_gemini: bool,
     persist_each: bool,
     client: httpx.AsyncClient | None = None,
-) -> tuple[ScenePlan, str, str, str] | None:
+    reuse_landscape_key: str | None = None,
+) -> tuple[ScenePlan, str, str, str, str] | None:
     settings = get_settings()
     storage = get_storage_provider()
-    prompt = image_prompt(scene, title, total)
-    png: bytes | None = None
+    landscape_prompt = image_prompt(scene, title, total, aspect_ratio="16:9")
+    portrait_prompt = image_prompt(scene, title, total, aspect_ratio="9:16")
     provider = "local"
-    if use_gemini:
-        png = await generate_gemini_image(
+    landscape_png: bytes | None = None
+    portrait_png: bytes | None = None
+    key = reuse_landscape_key or f"illustrations/{lesson_id}/scene_{scene.position + 1}.png"
+    portrait_key = f"illustrations/{lesson_id}/scene_{scene.position + 1}_9x16.png"
+
+    async def _draw_aspect(prompt: str, ratio: str) -> bytes | None:
+        if not use_gemini:
+            return None
+        return await generate_gemini_image(
             prompt,
             settings.google_ai_api_key,
             settings.gemini_image_model,
             client=client,
+            aspect_ratio=ratio,
         )
-        if png:
+
+    if use_gemini:
+        jobs = []
+        if not reuse_landscape_key:
+            jobs.append(("16:9", _draw_aspect(landscape_prompt, "16:9")))
+        jobs.append(("9:16", _draw_aspect(portrait_prompt, "9:16")))
+        drawn = await asyncio.gather(*[job for _, job in jobs], return_exceptions=True)
+        by_ratio = {ratio: result for (ratio, _), result in zip(jobs, drawn, strict=True)}
+        land = by_ratio.get("16:9")
+        port = by_ratio.get("9:16")
+        if isinstance(land, Exception):
+            logger.warning("gemini_landscape_failed err=%r", land)
+            land = None
+        if isinstance(port, Exception):
+            logger.warning("gemini_portrait_failed err=%r", port)
+            port = None
+        if land:
+            landscape_png = land
             provider = "gemini"
-        else:
+        if port:
+            portrait_png = port
+            provider = "gemini"
+        if not reuse_landscape_key and not landscape_png:
             logger.warning(
                 "gemini_image_unavailable lesson_id=%s scene=%s",
                 lesson_id,
                 scene.position + 1,
             )
             return None
-    if not png:
-        png = render_placeholder_png(scene.caption, scene.position, total, title, scene.visual)
-    key = f"illustrations/{lesson_id}/scene_{scene.position + 1}.png"
-    await storage.save(key, png, "image/png")
+
+    if not reuse_landscape_key:
+        if not landscape_png:
+            landscape_png = render_placeholder_png(
+                scene.caption, scene.position, total, title, scene.visual
+            )
+        landscape_png = letterbox_png(landscape_png, 1280, 720)
+        await storage.save(key, landscape_png, "image/png")
+    if not portrait_png:
+        portrait_png = landscape_png or render_placeholder_png(
+            scene.caption, scene.position, total, title, scene.visual
+        )
+    portrait_png = letterbox_png(portrait_png, 720, 1280)
+    await storage.save(portrait_key, portrait_png, "image/png")
     logger.info(
-        "illustration_saved lesson_id=%s scene=%s provider=%s",
+        "illustration_saved lesson_id=%s scene=%s provider=%s portrait=1",
         lesson_id,
         scene.position + 1,
         provider,
@@ -458,8 +556,10 @@ async def _draw_one_scene(
 
         async with _persist_lock:
             async with AsyncSessionLocal() as db:
-                await _upsert_illustration(db, lesson_id, scene, prompt, key, provider)
-    return (scene, prompt, key, provider)
+                await _upsert_illustration(
+                    db, lesson_id, scene, landscape_prompt, key, portrait_key, provider
+                )
+    return (scene, landscape_prompt, key, portrait_key, provider)
 
 
 async def _upsert_illustration(
@@ -468,6 +568,7 @@ async def _upsert_illustration(
     scene: ScenePlan,
     prompt: str,
     key: str,
+    portrait_key: str,
     provider: str,
 ) -> LessonIllustration:
     await db.execute(
@@ -482,6 +583,7 @@ async def _upsert_illustration(
         caption=scene.caption,
         prompt=prompt,
         storage_key=key,
+        portrait_storage_key=portrait_key,
         provider=provider,
     )
     db.add(row)
@@ -503,7 +605,7 @@ async def _upsert_illustration(
 async def _persist_illustrations(
     db: AsyncSession,
     lesson_id: str,
-    prepared: list[tuple[ScenePlan, str, str, str]],
+    prepared: list[tuple[ScenePlan, str, str, str, str]],
     *,
     commit: bool = False,
 ) -> list[LessonIllustration]:
@@ -513,13 +615,14 @@ async def _persist_illustrations(
         try:
             await db.execute(delete(LessonIllustration).where(LessonIllustration.lesson_id == lesson_id))
             rows: list[LessonIllustration] = []
-            for scene, prompt, key, provider in prepared:
+            for scene, prompt, key, portrait_key, provider in prepared:
                 row = LessonIllustration(
                     lesson_id=lesson_id,
                     position=scene.position,
                     caption=scene.caption,
                     prompt=prompt,
                     storage_key=key,
+                    portrait_storage_key=portrait_key,
                     provider=provider,
                 )
                 db.add(row)
@@ -631,6 +734,7 @@ async def draw_lesson_illustrations(
     async with _draw_lock(lesson_id):
         set_illustration_status(lesson_id, "drawing", MSG_DRAWING)
         skip_positions: set[int] = set()
+        reuse_landscape: dict[int, str] = {}
         async with AsyncSessionLocal() as db:
             lesson = await db.get(Lesson, lesson_id)
             if not lesson:
@@ -638,11 +742,21 @@ async def draw_lesson_illustrations(
                 return []
             existing = await list_lesson_illustrations(db, lesson_id)
             gemini_rows = [row for row in existing if row.provider == "gemini"]
-            if not force and len(gemini_rows) >= 4:
+            complete = [
+                row
+                for row in gemini_rows
+                if row.storage_key and (getattr(row, "portrait_storage_key", "") or "").strip()
+            ]
+            if not force and len(complete) >= 4:
                 set_illustration_status(lesson_id, "ready", "")
                 return existing
             if not force:
-                skip_positions = {row.position for row in gemini_rows}
+                skip_positions = {row.position for row in complete}
+                reuse_landscape = {
+                    row.position: row.storage_key
+                    for row in gemini_rows
+                    if row.storage_key and row.position not in skip_positions
+                }
             title = lesson.title
             language = lesson.language
             story = lesson.edited_text or lesson.original_text or ""
@@ -656,6 +770,7 @@ async def draw_lesson_illustrations(
                 prefer_gemini=prefer_gemini,
                 persist_each=True,
                 skip_positions=skip_positions,
+                reuse_landscape=reuse_landscape,
             )
         except Exception:
             set_illustration_status(lesson_id, "failed", MSG_FAILED)

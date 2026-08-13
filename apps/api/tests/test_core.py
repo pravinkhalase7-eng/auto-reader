@@ -196,6 +196,53 @@ def test_illustration_status_reports_failure(monkeypatch):
     assert "quota" in message.lower()
 
 
+def test_elevenlabs_speed_stays_in_range():
+    from app.services.elevenlabs import elevenlabs_speed
+
+    assert 0.7 <= elevenlabs_speed("very_slow") <= 1.2
+    assert elevenlabs_speed("normal") == 1.0
+    assert elevenlabs_speed("nope") == 1.0
+
+
+def test_elevenlabs_uses_v3_for_marathi():
+    from app.services.elevenlabs import elevenlabs_language_code, elevenlabs_model_for_language
+
+    assert elevenlabs_model_for_language("mr", "eleven_multilingual_v2") == "eleven_v3"
+    assert elevenlabs_language_code("mr") == "mr"
+    assert elevenlabs_model_for_language("hi", "eleven_multilingual_v2") == "eleven_multilingual_v2"
+
+
+def test_elevenlabs_disabled_without_key(monkeypatch):
+    from app.services import elevenlabs as el
+
+    monkeypatch.setattr(el, "get_settings", lambda: type("S", (), {"elevenlabs_api_key": ""})())
+    assert el.elevenlabs_enabled() is False
+
+
+def test_elevenlabs_hides_library_voices():
+    from app.services.elevenlabs import prefer_teacher_voices, voice_usable_on_api
+
+    assert voice_usable_on_api({"category": "premade"}) is True
+    assert voice_usable_on_api({"category": "professional", "sharing": {"status": "copied"}}) is False
+    rows = prefer_teacher_voices(
+        [
+            {"id": "2", "name": "Will"},
+            {"id": "1", "name": "Alice - Clear, Engaging Educator"},
+        ]
+    )
+    assert rows[0]["id"] == "1"
+
+
+def test_elevenlabs_error_explains_library_voices():
+    from app.services.elevenlabs import elevenlabs_error_message
+
+    message, code = elevenlabs_error_message(
+        402, "Free users cannot use library voices via the API."
+    )
+    assert "Voice Library" in message
+    assert code == "ELEVENLABS_LIBRARY_VOICE"
+
+
 def test_illustration_status_stays_drawing_during_redraw(monkeypatch):
     from app.services import story_illustrations as si
 
@@ -251,8 +298,26 @@ async def test_illustration_scenes_draw_in_parallel(monkeypatch):
     )
     elapsed = time.monotonic() - t0
     assert len(prepared) == 4
-    assert elapsed < 0.85
-    assert len(started) == 4
+    assert elapsed < 1.4
+    assert len(started) == 8
+    assert all(row[3].endswith("_9x16.png") for row in prepared)
+
+
+def test_letterbox_png_fits_without_cropping():
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.story_illustrations import letterbox_png
+
+    src = Image.new("RGB", (1600, 900), (255, 0, 0))
+    buf = BytesIO()
+    src.save(buf, format="PNG")
+    out = letterbox_png(buf.getvalue(), 720, 1280)
+    img = Image.open(BytesIO(out))
+    assert img.size == (720, 1280)
+    assert img.getpixel((360, 640))[:3] == (255, 0, 0)
+    assert img.getpixel((10, 10))[:3] == (4, 47, 46)
 
 
 def test_tesseract_data_filters_low_confidence():

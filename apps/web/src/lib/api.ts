@@ -52,3 +52,17 @@ export async function api<T>(
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
+
+export async function apiAudio(path: string, body: unknown): Promise<Blob> {
+  const token = getToken();
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await parseError(res);
+  return res.blob();
+}

@@ -63,12 +63,30 @@ END $$;
 
 
 async def apply_schema_patches(bind) -> None:
-    """Existing Postgres DBs were created without ON DELETE CASCADE on timings."""
+    """Keep older databases in sync without a full migration tool."""
     dialect = getattr(getattr(bind, "dialect", None), "name", "") or ""
     url = str(settings.database_url)
-    if dialect != "postgresql" and not url.startswith("postgresql"):
+    is_postgres = dialect == "postgresql" or url.startswith("postgresql")
+    is_sqlite = dialect == "sqlite" or "sqlite" in url
+    if is_postgres:
+        await bind.execute(text(_TTS_WORD_FK_PATCH))
+        await bind.execute(
+            text(
+                "ALTER TABLE lesson_illustrations "
+                "ADD COLUMN IF NOT EXISTS portrait_storage_key VARCHAR(512) DEFAULT ''"
+            )
+        )
         return
-    await bind.execute(text(_TTS_WORD_FK_PATCH))
+    if is_sqlite:
+        rows = await bind.execute(text("PRAGMA table_info(lesson_illustrations)"))
+        cols = {row[1] for row in rows}
+        if cols and "portrait_storage_key" not in cols:
+            await bind.execute(
+                text(
+                    "ALTER TABLE lesson_illustrations "
+                    "ADD COLUMN portrait_storage_key VARCHAR(512) DEFAULT ''"
+                )
+            )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

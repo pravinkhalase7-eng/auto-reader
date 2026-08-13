@@ -22,8 +22,21 @@ import {
   trailingPunctKind,
   voicesForLanguage,
   waitForVoices,
+  hasNativeVoice,
+  voiceOptionLabel,
   type SpeechExpression,
 } from "@/lib/speech";
+import { ApiError } from "@/lib/api";
+import {
+  elevenLabsVoiceId,
+  elevenLabsVoiceURI,
+  fetchElevenLabsVoices,
+  isElevenLabsVoice,
+  playElevenLabsSpeech,
+  primeElevenLabsPlayback,
+  type ElevenLabsVoice,
+} from "@/lib/elevenlabs";
+import { cancelWordPreview } from "@/lib/preview-word";
 
 type FlatWord = {
   id: string;
@@ -131,22 +144,55 @@ export function ReadingPlayer({
 
   const [voiceWarning, setVoiceWarning] = useState<string | null>(null);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [elevenVoices, setElevenVoices] = useState<ElevenLabsVoice[]>([]);
+  const [elevenEnabled, setElevenEnabled] = useState(false);
 
   const cancelledRef = useRef(false);
   const pausedRef = useRef(false);
   const runIdRef = useRef(0);
   const wordCursorRef = useRef(0);
   const sentenceCursorRef = useRef(0);
+  const skipElevenRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    skipElevenRef.current = false;
+    setVoiceWarning(null);
+    setPreferredVoiceURI(null);
     waitForVoices().then((voices) => {
+      if (cancelled) return;
       setAvailableVoices(voicesForLanguage(content.language, voices));
     });
-  }, [content.language]);
+    fetchElevenLabsVoices().then((result) => {
+      if (cancelled) return;
+      setElevenEnabled(result.enabled);
+      setElevenVoices(result.voices);
+      if (!result.enabled) {
+        setVoiceWarning("ElevenLabs voices did not load. Refresh the page.");
+        return;
+      }
+      if (content.language !== "mr" || !result.voices.length) return;
+      waitForVoices().then((voices) => {
+        if (cancelled) return;
+        if (hasNativeVoice("mr", voices)) return;
+        skipElevenRef.current = false;
+        setPreferredVoiceURI(elevenLabsVoiceURI(result.voices[0].id));
+        setVoiceWarning(
+          "This device has no Marathi voice. ElevenLabs is selected so मराठी is pronounced clearly. Hover a word, or click it, to hear it.",
+        );
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content.language, setPreferredVoiceURI]);
 
   useEffect(() => {
-    setPreferredVoiceURI(null);
-  }, [content.language, setPreferredVoiceURI]);
+    if (!isElevenLabsVoice(preferredVoiceURI) || !elevenVoices.length) return;
+    const selected = elevenLabsVoiceId(preferredVoiceURI);
+    if (selected && elevenVoices.some((voice) => voice.id === selected)) return;
+    setPreferredVoiceURI(elevenLabsVoiceURI(elevenVoices[0].id));
+  }, [elevenVoices, preferredVoiceURI, setPreferredVoiceURI]);
 
   const activateGlobal = useCallback(
     (index: number) => {
@@ -161,22 +207,47 @@ export function ReadingPlayer({
   );
 
   const speakUtterance = useCallback(
-    (
+    async (
       text: string,
       voices: SpeechSynthesisVoice[],
       handlers?: {
         onStart?: () => void;
         expression?: SpeechExpression;
         keepAlive?: boolean;
+        onProgress?: (elapsedMs: number, durationMs: number) => void;
       },
-    ) =>
-      new Promise<"ended" | "error" | "interrupted">((resolve) => {
+    ) => {
+      const elevenId = elevenLabsVoiceId(preferredVoiceURI);
+      if (elevenId && !skipElevenRef.current) {
+        try {
+          return await playElevenLabsSpeech({
+            text,
+            voiceId: elevenId,
+            speed,
+            language: content.language,
+            volume,
+            onStart: handlers?.onStart,
+            onProgress: handlers?.onProgress,
+            isCancelled: () => cancelledRef.current,
+          });
+        } catch (err) {
+          skipElevenRef.current = true;
+          const message =
+            err instanceof ApiError || err instanceof Error
+              ? err.message
+              : "I couldn't use the ElevenLabs voice this time.";
+          setVoiceWarning(`${message} Using this device instead.`);
+        }
+      }
+      if (typeof window === "undefined" || !window.speechSynthesis) return "error";
+      const browserVoices = voices.length ? voices : await waitForVoices();
+      return new Promise<"ended" | "error" | "interrupted">((resolve) => {
         const { utterance, warning } = buildUtterance(text, {
           language: content.language,
           speed,
           volume,
-          voices,
-          preferredVoiceURI,
+          voices: browserVoices,
+          preferredVoiceURI: skipElevenRef.current ? null : preferredVoiceURI,
           pitch: handlers?.expression?.pitch,
           rateMul: handlers?.expression?.rateMul,
           keepAlive: handlers?.keepAlive ?? false,
@@ -189,7 +260,8 @@ export function ReadingPlayer({
           resolve(err === "interrupted" || err === "canceled" ? "interrupted" : "error");
         };
         window.speechSynthesis.speak(utterance);
-      }),
+      });
+    },
     [content.language, preferredVoiceURI, speed, volume],
   );
 
@@ -230,10 +302,26 @@ export function ReadingPlayer({
     [paragraphs, sentences],
   );
 
+  const finishPlayback = useCallback(
+    (runId: number) => {
+      if (runIdRef.current !== runId) return;
+      pausedRef.current = false;
+      wordCursorRef.current = 0;
+      sentenceCursorRef.current = 0;
+      setPlaying(false);
+      setActive(null);
+      setParagraphIndex(0);
+      document
+        .querySelector<HTMLElement>("[data-lesson-scroll]")
+        ?.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [setActive, setParagraphIndex, setPlaying],
+  );
+
   /** Fluent teacher narration — whole phrases, no word highlight. */
   const speakDirect = useCallback(
     async (startPara: number) => {
-      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      if (typeof window === "undefined") return;
       if (mode === "read") {
         setPlaying(true);
         return;
@@ -247,7 +335,7 @@ export function ReadingPlayer({
       cancelSpeech();
       await sleep(60);
 
-      const voices = await waitForVoices();
+      const voices = isElevenLabsVoice(preferredVoiceURI) ? [] : await waitForVoices();
       const chunks = narrationChunks(Math.max(0, startPara));
 
       for (const chunk of chunks) {
@@ -273,14 +361,15 @@ export function ReadingPlayer({
       }
 
       if (runIdRef.current === runId) {
-        setPlaying(false);
-        setActive(null);
+        finishPlayback(runId);
       }
     },
     [
+      finishPlayback,
       mode,
       narrationChunks,
       paragraphs,
+      preferredVoiceURI,
       setActive,
       setParagraphIndex,
       setPlaying,
@@ -292,7 +381,7 @@ export function ReadingPlayer({
   /** One spoken word = one highlighted word. Advance only after that utterance ends. */
   const speakFromWord = useCallback(
     async (startWord: number) => {
-      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      if (typeof window === "undefined") return;
       if (mode === "read") {
         setPlaying(true);
         return;
@@ -313,9 +402,50 @@ export function ReadingPlayer({
       cancelSpeech();
       await sleep(60);
 
+      const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
+
+      if (isElevenLabsVoice(preferredVoiceURI)) {
+        for (let s = 0; s < sentences.length; s++) {
+          const sentence = sentences[s];
+          if (sentence.globalStart + sentence.words.length - 1 < from) continue;
+          if (cancelledRef.current || runIdRef.current !== runId) return;
+          while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
+            await sleep(80);
+          }
+          if (cancelledRef.current || runIdRef.current !== runId) return;
+          sentenceCursorRef.current = s;
+          const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
+          if (pIdx >= 0) setParagraphIndex(pIdx);
+          const startLocal = Math.max(0, from - sentence.globalStart);
+          const slice = sentence.words.slice(startLocal);
+          const spoken = slice.map((word) => word.text).join(" ").trim();
+          if (!spoken) continue;
+          const result = await speakUtterance(spoken, [], {
+            keepAlive: true,
+            onStart: () => activateGlobal(sentence.globalStart + startLocal),
+            onProgress: (elapsedMs, durationMs) => {
+              if (!durationMs) return;
+              const i = Math.min(
+                slice.length - 1,
+                Math.max(0, Math.floor((elapsedMs / durationMs) * slice.length)),
+              );
+              activateGlobal(sentence.globalStart + startLocal + i);
+            },
+          });
+          if (cancelledRef.current || runIdRef.current !== runId) return;
+          if (result === "interrupted") return;
+          if (result === "error") {
+            setVoiceWarning("ElevenLabs could not play that line. Try Play again, or use This device.");
+            return;
+          }
+        }
+        if (runIdRef.current === runId) finishPlayback(runId);
+        return;
+      }
+
+      if (!window.speechSynthesis) return;
       const voices = await waitForVoices();
       const natural = playbackStyle === "natural";
-      const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
 
       for (let s = 0; s < sentences.length; s++) {
         const sentence = sentences[s];
@@ -371,14 +501,16 @@ export function ReadingPlayer({
         }
       }
 
-      if (runIdRef.current === runId) setPlaying(false);
+      if (runIdRef.current === runId) finishPlayback(runId);
     },
     [
       activateGlobal,
       content.language,
+      finishPlayback,
       mode,
       paragraphs,
       playbackStyle,
+      preferredVoiceURI,
       sentences,
       setParagraphIndex,
       setPlaying,
@@ -399,11 +531,13 @@ export function ReadingPlayer({
     cancelledRef.current = true;
     pausedRef.current = false;
     runIdRef.current += 1;
-    cancelSpeech();
+    cancelWordPreview();
     setPlaying(false);
   }, [setPlaying]);
 
   const play = () => {
+    cancelWordPreview();
+    primeElevenLabsPlayback();
     void speakFromWord(firstWordForParagraph(paragraphIndex));
   };
 
@@ -415,6 +549,7 @@ export function ReadingPlayer({
 
   const resume = () => {
     pausedRef.current = false;
+    primeElevenLabsPlayback();
     void speakFromWord(wordCursorRef.current);
   };
 
@@ -423,20 +558,25 @@ export function ReadingPlayer({
     reset();
     sentenceCursorRef.current = 0;
     wordCursorRef.current = 0;
+    primeElevenLabsPlayback();
     window.setTimeout(() => void speakFromWord(0), 60);
   };
 
   useEffect(() => () => stopAll(), [stopAll]);
 
   const activeIndex = words.findIndex((w) => w.id === activeWordId);
-  const progress =
-    playbackStyle === "direct"
+  const atStart = !isPlaying && paragraphIndex === 0 && !activeWordId;
+  const progress = atStart
+    ? 0
+    : playbackStyle === "direct"
       ? paragraphs.length === 0
         ? 0
         : ((paragraphIndex + 1) / paragraphs.length) * 100
       : words.length === 0
         ? 0
-        : ((Math.max(activeIndex, 0) + 1) / words.length) * 100;
+        : activeIndex < 0
+          ? 0
+          : ((activeIndex + 1) / words.length) * 100;
 
   return (
     <div className="rounded-3xl border border-teal-900/10 bg-white/95 p-4 shadow-lg">
@@ -467,7 +607,6 @@ export function ReadingPlayer({
           type="button"
           onClick={() => {
             stopAll();
-            setActive(null);
             setPlaybackStyle("direct");
           }}
           className={cn(
@@ -504,6 +643,92 @@ export function ReadingPlayer({
           Word by word
         </button>
       </div>
+
+      <p className="mb-1 text-xs font-semibold text-teal-800/80">Voice</p>
+      <div className="mb-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            stopAll();
+            setPreferredVoiceURI(availableVoices[0]?.voiceURI ?? null);
+          }}
+          className={cn(
+            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            !isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
+          )}
+        >
+          This device
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            stopAll();
+            skipElevenRef.current = false;
+            setVoiceWarning(null);
+            const first = elevenVoices[0]?.id || "default";
+            setPreferredVoiceURI(elevenLabsVoiceURI(first));
+          }}
+          className={cn(
+            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
+          )}
+        >
+          ElevenLabs
+        </button>
+      </div>
+      {isElevenLabsVoice(preferredVoiceURI) && elevenVoices.length > 1 ? (
+        <label className="mb-3 flex flex-col gap-1 text-sm text-teal-900">
+          ElevenLabs voice
+          <select
+            className="rounded-xl border border-teal-900/15 bg-white px-2 py-1.5"
+            value={preferredVoiceURI ?? ""}
+            onChange={(e) => {
+              stopAll();
+              skipElevenRef.current = false;
+              setVoiceWarning(null);
+              setPreferredVoiceURI(e.target.value || null);
+            }}
+            aria-label="ElevenLabs voice"
+          >
+            {elevenVoices.map((voice) => (
+              <option key={voice.id} value={elevenLabsVoiceURI(voice.id)}>
+                {voice.name}
+                {voice.accent ? ` · ${voice.accent}` : ""}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs font-normal text-teal-800/70">
+            {content.language === "mr"
+              ? "ElevenLabs v3 reads मराठी. Classroom voices work with a free key."
+              : "Classroom voices that work with a free ElevenLabs key. Voice Library voices need a paid plan."}
+          </span>
+        </label>
+      ) : null}
+      {!isElevenLabsVoice(preferredVoiceURI) && availableVoices.length > 0 ? (
+        <label className="mb-3 flex flex-col gap-1 text-sm text-teal-900">
+          Device voice
+          <select
+            className="rounded-xl border border-teal-900/15 bg-white px-2 py-1.5"
+            value={preferredVoiceURI ?? availableVoices[0]?.voiceURI ?? ""}
+            onChange={(e) => {
+              stopAll();
+              setPreferredVoiceURI(e.target.value || null);
+            }}
+            aria-label="Device voice"
+          >
+            {availableVoices.map((v) => (
+              <option key={v.voiceURI} value={v.voiceURI}>
+                {voiceOptionLabel(v, content.language)}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {!elevenEnabled ? (
+        <p className="mb-3 text-xs text-amber-800">
+          ElevenLabs did not load. Refresh this page after the API has the key.
+        </p>
+      ) : null}
 
       <div className="mb-3 h-2 overflow-hidden rounded-full bg-teal-900/10">
         <div
@@ -592,25 +817,6 @@ export function ReadingPlayer({
           />
         </label>
       </div>
-
-      {availableVoices.length > 0 ? (
-        <label className="mt-3 flex flex-col gap-1 text-sm text-teal-900">
-          Voice
-          <select
-            className="rounded-xl border border-teal-900/15 bg-white px-2 py-1.5"
-            value={preferredVoiceURI ?? availableVoices[0]?.voiceURI ?? ""}
-            onChange={(e) => setPreferredVoiceURI(e.target.value || null)}
-            aria-label="Narrator voice"
-          >
-            {availableVoices.map((v) => (
-              <option key={v.voiceURI} value={v.voiceURI}>
-                {v.name}
-                {!v.localService ? " (natural)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, dashboard, lessons, quizzes, storage
+from app.api.v1 import auth, dashboard, lessons, quizzes, storage, tts
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -8,6 +8,7 @@ api_router.include_router(lessons.router)
 api_router.include_router(quizzes.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(storage.router)
+api_router.include_router(tts.router)
 
 
 @api_router.get("/health")

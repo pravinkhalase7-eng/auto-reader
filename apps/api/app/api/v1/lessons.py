@@ -351,6 +351,14 @@ async def get_illustrations(
     gemini_count = sum(1 for row in rows if row.provider == "gemini")
     has_key = bool(get_settings().google_ai_api_key)
     status, message = public_illustration_status(lesson_id, gemini_count)
+    missing_portrait = any(
+        row.provider == "gemini" and not (getattr(row, "portrait_storage_key", "") or "").strip()
+        for row in rows
+    )
+    if status == "ready" and missing_portrait and has_key and not illustration_in_progress(lesson_id):
+        set_illustration_status(lesson_id, "drawing", "Drawing tall 9:16 pictures for the phone video.")
+        _enqueue_illustrations(lesson_id)
+        status, message = public_illustration_status(lesson_id, gemini_count)
     if status == "idle":
         if has_key and not illustration_in_progress(lesson_id):
             set_illustration_status(lesson_id, "drawing", message)

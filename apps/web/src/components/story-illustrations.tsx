@@ -80,13 +80,17 @@ export function useStoryIllustrationAssets(lessonId: string) {
     [allScenes],
   );
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const loadedSceneKey = scenes.map((scene) => scene.id).join(",");
+  const [portraitUrls, setPortraitUrls] = useState<Record<string, string>>({});
+  const loadedSceneKey = scenes
+    .map((scene) => `${scene.id}:${scene.storage_key}:${scene.portrait_storage_key || ""}`)
+    .join(",");
 
   useEffect(() => {
     const created: string[] = [];
     let cancelled = false;
     async function load() {
       const next: Record<string, string> = {};
+      const nextPortrait: Record<string, string> = {};
       await Promise.all(
         scenes.map(async (scene) => {
           try {
@@ -101,14 +105,32 @@ export function useStoryIllustrationAssets(lessonId: string) {
           } catch {
             /* skip */
           }
+          const portraitKey = scene.portrait_storage_key?.trim();
+          if (!portraitKey) return;
+          try {
+            const res = await fetch(`${API_URL}/storage/${portraitKey}`, {
+              headers: { Authorization: `Bearer ${getToken()}` },
+            });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            created.push(url);
+            nextPortrait[scene.id] = url;
+          } catch {
+            /* skip */
+          }
         }),
       );
-      if (!cancelled) setUrls(next);
+      if (!cancelled) {
+        setUrls(next);
+        setPortraitUrls(nextPortrait);
+      }
     }
     if (scenes.length) {
       void load();
     } else {
       setUrls((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      setPortraitUrls((prev) => (Object.keys(prev).length === 0 ? prev : {}));
     }
     return () => {
       cancelled = true;
@@ -116,7 +138,7 @@ export function useStoryIllustrationAssets(lessonId: string) {
     };
   }, [loadedSceneKey, scenes]);
 
-  return { scenes, urls, isLoading, isError, error, status, message, refetch };
+  return { scenes, urls, portraitUrls, isLoading, isError, error, status, message, refetch };
 }
 
 export { sceneIndexForParagraph } from "@/lib/story-video";
@@ -130,7 +152,7 @@ export function StoryIllustrations({
 }) {
   const paragraphIndex = useReaderStore((s) => s.paragraphIndex);
   const queryClient = useQueryClient();
-  const { scenes, urls, isLoading, isError, error, status, message, refetch } =
+  const { scenes, urls, portraitUrls, isLoading, isError, error, status, message, refetch } =
     useStoryIllustrationAssets(lessonId);
   const contentQuery = useQuery({
     queryKey: ["content", lessonId],
@@ -244,15 +266,14 @@ export function StoryIllustrations({
             >
               {urls[scene.id] ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={urls[scene.id]} alt={scene.caption} className="h-28 w-full object-cover" />
+                <img src={urls[scene.id]} alt="" className="h-28 w-full object-cover object-center" />
               ) : (
                 <div className="flex h-28 items-center justify-center bg-teal-50 text-teal-800/60">
                   <ImageIcon className="h-6 w-6" />
                 </div>
               )}
-              <p className="bg-white px-2 py-1 text-[11px] font-semibold text-teal-900">
-                {i + 1}. {scene.caption.slice(0, 48)}
-                {scene.caption.length > 48 ? "…" : ""}
+              <p className="bg-white px-2 py-1 text-center text-[11px] font-semibold text-teal-900">
+                {i + 1}
               </p>
             </button>
             {urls[scene.id] ? (
@@ -276,6 +297,7 @@ export function StoryIllustrations({
             content={contentQuery.data}
             scenes={scenes}
             urls={urls}
+            portraitUrls={portraitUrls}
           />
         ) : null}
         <Button size="sm" variant="ghost" disabled={drawing} onClick={redraw}>

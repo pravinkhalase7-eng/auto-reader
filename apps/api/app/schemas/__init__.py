@@ -125,6 +125,7 @@ class IllustrationOut(BaseModel):
     position: int
     caption: str
     storage_key: str
+    portrait_storage_key: str = ""
     provider: str
 
     model_config = {"from_attributes": True}

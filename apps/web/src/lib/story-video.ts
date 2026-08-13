@@ -1,30 +1,27 @@
 import type { LessonContent } from "@/types";
 
-export const VIDEO_WIDTH = 1280;
-export const VIDEO_HEIGHT = 720;
+export type VideoAspect = "16:9" | "9:16";
 
-export function wrapCaption(text: string, maxChars = 54, maxLines = 3): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (next.length > maxChars && current) {
-      lines.push(current);
-      current = word;
-      if (lines.length === maxLines) break;
-    } else {
-      current = next;
-    }
-  }
-  if (current && lines.length < maxLines) lines.push(current);
-  if (lines.length === maxLines) {
-    const used = lines.join(" ").split(/\s+/).length;
-    if (used < words.length) {
-      lines[maxLines - 1] = `${lines[maxLines - 1].replace(/[.…]*$/, "")}…`;
-    }
-  }
-  return lines;
+export const VIDEO_ASPECTS: Record<
+  VideoAspect,
+  { width: number; height: number; label: string; hint: string }
+> = {
+  "16:9": { width: 1280, height: 720, label: "16:9", hint: "Landscape" },
+  "9:16": { width: 720, height: 1280, label: "9:16", hint: "Phone / Reels" },
+};
+
+export function videoDimensions(aspect: VideoAspect) {
+  return VIDEO_ASPECTS[aspect];
+}
+
+export function sceneMediaUrl(
+  sceneId: string,
+  aspect: VideoAspect,
+  urls: Record<string, string>,
+  portraitUrls: Record<string, string> = {},
+) {
+  if (aspect === "9:16" && portraitUrls[sceneId]) return portraitUrls[sceneId];
+  return urls[sceneId];
 }
 
 export function storyNarration(content: LessonContent): string[] {
@@ -52,6 +49,8 @@ export function sceneIndexForParagraph(
 export function recorderMimeType(): string | null {
   if (typeof MediaRecorder === "undefined") return null;
   const types = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
     "video/webm;codecs=vp9",
     "video/webm;codecs=vp8",
     "video/webm",

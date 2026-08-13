@@ -343,6 +343,7 @@ class LessonIllustration(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     caption: Mapped[str] = mapped_column(Text, default="")
     prompt: Mapped[str] = mapped_column(Text, default="")
     storage_key: Mapped[str] = mapped_column(String(512), default="")
+    portrait_storage_key: Mapped[str] = mapped_column(String(512), default="")
     provider: Mapped[str] = mapped_column(String(32), default="local")
 
     lesson: Mapped["Lesson"] = relationship(back_populates="illustrations")
