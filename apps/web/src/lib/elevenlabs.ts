@@ -72,22 +72,19 @@ function getPlaybackAudio() {
 /** Call from a click handler so later blob playback is allowed. */
 export function primeElevenLabsPlayback() {
   if (typeof window === "undefined") return;
+  // Only unlock autoplay with a throwaway element — never mute the shared player
+  // (that raced with blob playback and left lessons silent).
   const ping = new Audio(SILENT_WAV);
   ping.muted = true;
   enableInlinePlayback(ping);
-  void ping.play().catch(() => undefined);
+  void ping.play().catch(() => undefined).finally(() => {
+    ping.pause();
+    ping.removeAttribute("src");
+  });
   const audio = getPlaybackAudio();
-  if (!audio || (!audio.paused && audio.src.startsWith("blob:"))) return;
-  audio.muted = true;
-  audio.src = SILENT_WAV;
-  void audio
-    .play()
-    .catch(() => undefined)
-    .finally(() => {
-      if (audio.src.startsWith("blob:")) return;
-      audio.pause();
-      audio.muted = false;
-    });
+  if (audio) {
+    audio.muted = false;
+  }
 }
 
 export function cancelElevenLabsAudio() {
@@ -100,6 +97,7 @@ export function cancelElevenLabsAudio() {
     currentAudio.oncanplay = null;
     currentAudio.onloadedmetadata = null;
     currentAudio.pause();
+    currentAudio.muted = false;
     currentAudio.removeAttribute("src");
     currentAudio.load();
   }
@@ -136,8 +134,15 @@ export async function fetchElevenLabsAudio(opts: SpeakOpts): Promise<Blob> {
     language: opts.language,
   })
     .then((blob) => {
+      if (!blob || blob.size < 64) {
+        throw new Error("The voice response was empty. Try Play again.");
+      }
       remember(key, blob);
       return blob;
+    })
+    .catch((err) => {
+      audioCache.delete(key);
+      throw err;
     })
     .finally(() => {
       inflight.delete(key);
@@ -196,6 +201,7 @@ export async function playElevenLabsSpeech(opts: {
   const audio = getPlaybackAudio();
   if (!audio) return "error";
   const url = URL.createObjectURL(blob);
+  audio.muted = false;
   audio.volume = Math.min(1, Math.max(0, opts.volume));
 
   return new Promise((resolve) => {
@@ -239,22 +245,23 @@ export async function playElevenLabsSpeech(opts: {
         finish("interrupted");
         return;
       }
+      audio.muted = false;
       opts.onStart?.();
       emitProgress();
       audio
         .play()
         .then(() => {
+          audio.muted = false;
           raf = window.requestAnimationFrame(tick);
         })
         .catch(() => finish("error"));
     };
 
-    // Start as soon as the blob can play — no artificial 400ms wait
+    // Start as soon as the blob can play
     audio.onloadedmetadata = () => start();
     audio.oncanplay = () => start();
     audio.src = url;
     audio.load();
-    // Tiny fallback if metadata events are delayed on some browsers
-    window.setTimeout(start, 80);
+    window.setTimeout(start, 120);
   });
 }
