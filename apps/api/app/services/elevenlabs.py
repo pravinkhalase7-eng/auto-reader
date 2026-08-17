@@ -13,7 +13,7 @@ from app.core.exceptions import AppError
 logger = logging.getLogger(__name__)
 
 VOICES_URL = "https://api.elevenlabs.io/v1/voices"
-SPEAK_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+SPEAK_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?optimize_streaming_latency=3&output_format=mp3_22050_32"
 SPEED_MAP = {
     "very_slow": 0.75,
     "slow": 0.85,

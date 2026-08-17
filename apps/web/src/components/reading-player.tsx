@@ -34,6 +34,7 @@ import {
   isElevenLabsVoice,
   playElevenLabsSpeech,
   primeElevenLabsPlayback,
+  prefetchElevenLabsAudio,
   type ElevenLabsVoice,
 } from "@/lib/elevenlabs";
 import { cancelWordPreview } from "@/lib/preview-word";
@@ -352,13 +353,28 @@ export function ReadingPlayer({
 
       const voices = isElevenLabsVoice(preferredVoiceURI) ? [] : await waitForVoices();
       const chunks = narrationChunks(Math.max(0, startPara));
+      const elevenId = elevenLabsVoiceId(preferredVoiceURI);
 
-      for (const chunk of chunks) {
+      for (let c = 0; c < chunks.length; c++) {
+        const chunk = chunks[c];
         if (cancelledRef.current || runIdRef.current !== runId) return;
         while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
           await sleep(80);
         }
         if (cancelledRef.current || runIdRef.current !== runId) return;
+
+        // Prefetch the next paragraph while this one speaks (hides ElevenLabs latency)
+        if (elevenId) {
+          const next = chunks[c + 1];
+          if (next) {
+            prefetchElevenLabsAudio({
+              text: next.text,
+              voiceId: elevenId,
+              speed,
+              language: content.language,
+            });
+          }
+        }
 
         setParagraphIndex(chunk.paragraphIndex);
         setActive(null, null, chunk.paragraphId);
@@ -372,7 +388,7 @@ export function ReadingPlayer({
         });
         if (cancelledRef.current || runIdRef.current !== runId) return;
         if (result === "interrupted") return;
-        await waitIfActive(220, runId);
+        await waitIfActive(elevenId ? 80 : 220, runId);
       }
 
       if (runIdRef.current === runId) {
@@ -380,6 +396,7 @@ export function ReadingPlayer({
       }
     },
     [
+      content.language,
       finishPlayback,
       mode,
       narrationChunks,
@@ -389,6 +406,7 @@ export function ReadingPlayer({
       setParagraphIndex,
       setPlaying,
       speakUtterance,
+      speed,
       waitIfActive,
     ],
   );
@@ -420,21 +438,46 @@ export function ReadingPlayer({
       const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
 
       if (isElevenLabsVoice(preferredVoiceURI)) {
+        const elevenId = elevenLabsVoiceId(preferredVoiceURI);
+        const upcoming: { s: number; spoken: string; startLocal: number }[] = [];
         for (let s = 0; s < sentences.length; s++) {
           const sentence = sentences[s];
           if (sentence.globalStart + sentence.words.length - 1 < from) continue;
+          const startLocal = Math.max(0, from - sentence.globalStart);
+          const spoken = sentence.words
+            .slice(startLocal)
+            .map((word) => word.text)
+            .join(" ")
+            .trim();
+          if (!spoken) continue;
+          upcoming.push({ s, spoken, startLocal });
+        }
+
+        for (let u = 0; u < upcoming.length; u++) {
+          const { s, spoken, startLocal } = upcoming[u];
+          const sentence = sentences[s];
           if (cancelledRef.current || runIdRef.current !== runId) return;
           while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
             await sleep(80);
           }
           if (cancelledRef.current || runIdRef.current !== runId) return;
+
+          if (elevenId) {
+            const next = upcoming[u + 1];
+            if (next) {
+              prefetchElevenLabsAudio({
+                text: next.spoken,
+                voiceId: elevenId,
+                speed,
+                language: content.language,
+              });
+            }
+          }
+
           sentenceCursorRef.current = s;
           const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
           if (pIdx >= 0) setParagraphIndex(pIdx);
-          const startLocal = Math.max(0, from - sentence.globalStart);
           const slice = sentence.words.slice(startLocal);
-          const spoken = slice.map((word) => word.text).join(" ").trim();
-          if (!spoken) continue;
           const result = await speakUtterance(spoken, [], {
             keepAlive: true,
             onStart: () => activateGlobal(sentence.globalStart + startLocal),
@@ -553,6 +596,39 @@ export function ReadingPlayer({
   const play = () => {
     cancelWordPreview();
     primeElevenLabsPlayback();
+    const elevenId = elevenLabsVoiceId(preferredVoiceURI);
+    if (elevenId && !skipElevenRef.current) {
+      const start = firstWordForParagraph(paragraphIndex);
+      if (playbackStyle === "direct" || playbackStyle === "natural") {
+        const chunks = narrationChunks(paragraphIndex);
+        if (chunks[0]) {
+          prefetchElevenLabsAudio({
+            text: chunks[0].text,
+            voiceId: elevenId,
+            speed,
+            language: content.language,
+          });
+        }
+      } else {
+        const sentence = sentences.find((s) => s.globalStart + s.words.length - 1 >= start);
+        if (sentence) {
+          const startLocal = Math.max(0, start - sentence.globalStart);
+          const spoken = sentence.words
+            .slice(startLocal)
+            .map((w) => w.text)
+            .join(" ")
+            .trim();
+          if (spoken) {
+            prefetchElevenLabsAudio({
+              text: spoken,
+              voiceId: elevenId,
+              speed,
+              language: content.language,
+            });
+          }
+        }
+      }
+    }
     void speakFromWord(firstWordForParagraph(paragraphIndex));
   };
 

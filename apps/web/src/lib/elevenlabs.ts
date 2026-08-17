@@ -13,8 +13,20 @@ export type ElevenLabsVoice = {
   category?: string;
 };
 
+type SpeakOpts = {
+  text: string;
+  voiceId: string;
+  speed: SpeechSpeed;
+  language: string;
+};
+
 let currentAudio: HTMLAudioElement | null = null;
 let finishCurrent: ((result: "ended" | "interrupted" | "error") => void) | null = null;
+
+/** In-memory blob cache — avoids re-calling ElevenLabs for the same line. */
+const audioCache = new Map<string, Blob>();
+const inflight = new Map<string, Promise<Blob>>();
+const MAX_CACHE = 48;
 
 export function isElevenLabsVoice(uri: string | null | undefined): boolean {
   return Boolean(uri?.startsWith(ELEVENLABS_PREFIX));
@@ -27,6 +39,20 @@ export function elevenLabsVoiceId(uri: string | null | undefined): string | null
 
 export function elevenLabsVoiceURI(id: string) {
   return `${ELEVENLABS_PREFIX}${id}`;
+}
+
+function cacheKey(opts: SpeakOpts) {
+  return [opts.voiceId, opts.speed, opts.language, opts.text.trim()].join("\u0001");
+}
+
+function remember(key: string, blob: Blob) {
+  if (audioCache.has(key)) audioCache.delete(key);
+  audioCache.set(key, blob);
+  while (audioCache.size > MAX_CACHE) {
+    const oldest = audioCache.keys().next().value;
+    if (oldest === undefined) break;
+    audioCache.delete(oldest);
+  }
 }
 
 function enableInlinePlayback(audio: HTMLAudioElement) {
@@ -71,11 +97,18 @@ export function cancelElevenLabsAudio() {
     currentAudio.onended = null;
     currentAudio.onerror = null;
     currentAudio.ontimeupdate = null;
+    currentAudio.oncanplay = null;
+    currentAudio.onloadedmetadata = null;
     currentAudio.pause();
     currentAudio.removeAttribute("src");
     currentAudio.load();
   }
   finish?.("interrupted");
+}
+
+export function clearElevenLabsCache() {
+  audioCache.clear();
+  inflight.clear();
 }
 
 export async function fetchElevenLabsVoices(): Promise<{ enabled: boolean; voices: ElevenLabsVoice[] }> {
@@ -88,18 +121,37 @@ export async function fetchElevenLabsVoices(): Promise<{ enabled: boolean; voice
   }
 }
 
-export async function fetchElevenLabsAudio(opts: {
-  text: string;
-  voiceId: string;
-  speed: SpeechSpeed;
-  language: string;
-}): Promise<Blob> {
-  return apiAudio("/tts/speak", {
+export async function fetchElevenLabsAudio(opts: SpeakOpts): Promise<Blob> {
+  const key = cacheKey(opts);
+  const hit = audioCache.get(key);
+  if (hit) return hit;
+
+  const pending = inflight.get(key);
+  if (pending) return pending;
+
+  const request = apiAudio("/tts/speak", {
     text: opts.text,
     voice_id: opts.voiceId,
     speed: opts.speed,
     language: opts.language,
-  });
+  })
+    .then((blob) => {
+      remember(key, blob);
+      return blob;
+    })
+    .finally(() => {
+      inflight.delete(key);
+    });
+
+  inflight.set(key, request);
+  return request;
+}
+
+/** Warm the next line while the current one plays — removes inter-sentence buffering. */
+export function prefetchElevenLabsAudio(opts: SpeakOpts) {
+  const key = cacheKey(opts);
+  if (audioCache.has(key) || inflight.has(key)) return;
+  void fetchElevenLabsAudio(opts).catch(() => undefined);
 }
 
 function durationMs(audio: HTMLAudioElement, text: string) {
@@ -119,6 +171,8 @@ export async function playElevenLabsSpeech(opts: {
   isCancelled?: () => boolean;
 }): Promise<"ended" | "interrupted" | "error"> {
   cancelElevenLabsAudio();
+
+  // Fetch (or reuse cache) before wiring audio — prefetch makes this near-instant mid-lesson
   const blob = await fetchElevenLabsAudio({
     text: opts.text,
     voiceId: opts.voiceId,
@@ -143,6 +197,8 @@ export async function playElevenLabsSpeech(opts: {
       audio.onended = null;
       audio.onerror = null;
       audio.ontimeupdate = null;
+      audio.oncanplay = null;
+      audio.onloadedmetadata = null;
       URL.revokeObjectURL(url);
       resolve(result);
     };
@@ -162,6 +218,7 @@ export async function playElevenLabsSpeech(opts: {
     audio.onended = () => finish(opts.isCancelled?.() ? "interrupted" : "ended");
     audio.onerror = () => finish("error");
     audio.ontimeupdate = () => emitProgress();
+
     let begun = false;
     const start = () => {
       if (settled || begun) return;
@@ -179,9 +236,13 @@ export async function playElevenLabsSpeech(opts: {
         })
         .catch(() => finish("error"));
     };
+
+    // Start as soon as the blob can play — no artificial 400ms wait
     audio.onloadedmetadata = () => start();
+    audio.oncanplay = () => start();
     audio.src = url;
     audio.load();
-    window.setTimeout(start, 400);
+    // Tiny fallback if metadata events are delayed on some browsers
+    window.setTimeout(start, 80);
   });
 }
