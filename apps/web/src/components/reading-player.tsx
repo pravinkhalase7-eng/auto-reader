@@ -33,8 +33,10 @@ import {
   fetchElevenLabsVoices,
   isElevenLabsVoice,
   playElevenLabsSpeech,
-  primeElevenLabsPlayback,
+  prefetchElevenLabsAhead,
   prefetchElevenLabsAudio,
+  primeElevenLabsPlayback,
+  warmElevenLabsFirst,
   type ElevenLabsVoice,
 } from "@/lib/elevenlabs";
 import { cancelWordPreview } from "@/lib/preview-word";
@@ -297,21 +299,52 @@ export function ReadingPlayer({
   }, []);
 
   const narrationChunks = useCallback(
-    (startPara: number) => {
-      const chunks: { paragraphId: string; paragraphIndex: number; text: string }[] = [];
+    (startPara: number, maxChars = 360) => {
+      const chunks: {
+        paragraphId: string;
+        paragraphIndex: number;
+        text: string;
+        startWord: number;
+        wordCount: number;
+      }[] = [];
       for (let p = startPara; p < paragraphs.length; p++) {
         const para = paragraphs[p];
         const paraSentences = sentences.filter((s) => s.paragraphId === para.id);
-        const texts = paraSentences.map((s) => s.text).filter(Boolean);
-        if (!texts.length) continue;
-        const joined = texts.join(" ");
-        if (joined.length <= 360) {
-          chunks.push({ paragraphId: para.id, paragraphIndex: p, text: joined });
-        } else {
-          for (const text of texts) {
-            chunks.push({ paragraphId: para.id, paragraphIndex: p, text });
+        if (!paraSentences.length) continue;
+
+        let buf = "";
+        let bufStart = paraSentences[0].globalStart;
+        let bufWords = 0;
+        const flush = () => {
+          const text = buf.trim();
+          if (!text) return;
+          chunks.push({
+            paragraphId: para.id,
+            paragraphIndex: p,
+            text,
+            startWord: bufStart,
+            wordCount: bufWords,
+          });
+          buf = "";
+          bufWords = 0;
+        };
+
+        for (const sent of paraSentences) {
+          const piece = sent.text.trim();
+          if (!piece) continue;
+          const next = buf ? `${buf} ${piece}` : piece;
+          if (buf && next.length > maxChars) {
+            flush();
+            buf = piece;
+            bufStart = sent.globalStart;
+            bufWords = sent.words.length;
+          } else {
+            if (!buf) bufStart = sent.globalStart;
+            buf = next;
+            bufWords += sent.words.length;
           }
         }
+        flush();
       }
       return chunks;
     },
@@ -334,7 +367,7 @@ export function ReadingPlayer({
     [setActive, setParagraphIndex, setPlaying],
   );
 
-  /** Fluent teacher narration — whole phrases, no word highlight. */
+  /** Fluent teacher narration — whole phrases; ElevenLabs uses large prebuffered chunks. */
   const speakDirect = useCallback(
     async (startPara: number) => {
       if (typeof window === "undefined") return;
@@ -349,11 +382,39 @@ export function ReadingPlayer({
       setPlaying(true);
       setActive(null, null, paragraphs[startPara]?.id ?? null);
       cancelSpeech();
-      await sleep(60);
+      await sleep(40);
 
-      const voices = isElevenLabsVoice(preferredVoiceURI) ? [] : await waitForVoices();
-      const chunks = narrationChunks(Math.max(0, startPara));
       const elevenId = elevenLabsVoiceId(preferredVoiceURI);
+      const usingEleven = Boolean(elevenId && !skipElevenRef.current);
+      const voices = usingEleven ? [] : await waitForVoices();
+      // Larger chunks = far fewer ElevenLabs round-trips (main cause of buffering)
+      const chunks = narrationChunks(Math.max(0, startPara), usingEleven ? 1100 : 360);
+
+      if (usingEleven && elevenId && chunks[0]) {
+        setVoiceWarning("Preparing voice…");
+        try {
+          await warmElevenLabsFirst({
+            text: chunks[0].text,
+            voiceId: elevenId,
+            speed,
+            language: content.language,
+          });
+          prefetchElevenLabsAhead(
+            chunks.map((c) => ({
+              text: c.text,
+              voiceId: elevenId,
+              speed,
+              language: content.language,
+            })),
+            1,
+            2,
+          );
+        } catch {
+          /* speakUtterance will surface the error */
+        }
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        setVoiceWarning(null);
+      }
 
       for (let c = 0; c < chunks.length; c++) {
         const chunk = chunks[c];
@@ -363,32 +424,49 @@ export function ReadingPlayer({
         }
         if (cancelledRef.current || runIdRef.current !== runId) return;
 
-        // Prefetch the next paragraph while this one speaks (hides ElevenLabs latency)
-        if (elevenId) {
-          const next = chunks[c + 1];
-          if (next) {
-            prefetchElevenLabsAudio({
-              text: next.text,
+        if (elevenId && usingEleven) {
+          prefetchElevenLabsAhead(
+            chunks.map((item) => ({
+              text: item.text,
               voiceId: elevenId,
               speed,
               language: content.language,
-            });
-          }
+            })),
+            c + 1,
+            2,
+          );
         }
 
         setParagraphIndex(chunk.paragraphIndex);
-        setActive(null, null, chunk.paragraphId);
         sentenceCursorRef.current = paragraphs[chunk.paragraphIndex]?.startSentence ?? 0;
-        wordCursorRef.current = paragraphs[chunk.paragraphIndex]?.startWord ?? 0;
+        wordCursorRef.current = chunk.startWord;
 
+        const highlight = playbackStyle !== "direct";
         const result = await speakUtterance(chunk.text, voices, {
           keepAlive: true,
           expression: { pitch: 1.04, rateMul: 1, pauseAfterMs: 0 },
-          onStart: () => setActive(null, null, chunk.paragraphId),
+          onStart: () => {
+            if (highlight) activateGlobal(chunk.startWord);
+            else setActive(null, null, chunk.paragraphId);
+          },
+          onProgress: highlight
+            ? (elapsedMs, durationMs) => {
+                if (!durationMs || chunk.wordCount < 1) return;
+                const i = Math.min(
+                  chunk.wordCount - 1,
+                  Math.max(0, Math.floor((elapsedMs / durationMs) * chunk.wordCount)),
+                );
+                activateGlobal(chunk.startWord + i);
+              }
+            : undefined,
         });
         if (cancelledRef.current || runIdRef.current !== runId) return;
         if (result === "interrupted") return;
-        await waitIfActive(elevenId ? 80 : 220, runId);
+        if (result === "error" && usingEleven) {
+          setVoiceWarning("ElevenLabs could not play that line. Try Play again, or use This device.");
+          return;
+        }
+        await waitIfActive(usingEleven ? 40 : 220, runId);
       }
 
       if (runIdRef.current === runId) {
@@ -396,11 +474,13 @@ export function ReadingPlayer({
       }
     },
     [
+      activateGlobal,
       content.language,
       finishPlayback,
       mode,
       narrationChunks,
       paragraphs,
+      playbackStyle,
       preferredVoiceURI,
       setActive,
       setParagraphIndex,
@@ -411,7 +491,7 @@ export function ReadingPlayer({
     ],
   );
 
-  /** One spoken word = one highlighted word. Advance only after that utterance ends. */
+  /** One spoken word = one highlighted word. Cloud voices use continuous chunks instead. */
   const speakFromWord = useCallback(
     async (startWord: number) => {
       if (typeof window === "undefined") return;
@@ -419,11 +499,19 @@ export function ReadingPlayer({
         setPlaying(true);
         return;
       }
+
+      let para = 0;
+      for (let i = 0; i < paragraphs.length; i++) {
+        if (startWord >= paragraphs[i].startWord) para = i;
+      }
+
+      // ElevenLabs: never speak sentence-by-sentence — that is what caused buffering
+      if (isElevenLabsVoice(preferredVoiceURI) && !skipElevenRef.current) {
+        await speakDirect(para);
+        return;
+      }
+
       if (playbackStyle === "direct") {
-        let para = 0;
-        for (let i = 0; i < paragraphs.length; i++) {
-          if (startWord >= paragraphs[i].startWord) para = i;
-        }
         await speakDirect(para);
         return;
       }
@@ -436,70 +524,6 @@ export function ReadingPlayer({
       await sleep(60);
 
       const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
-
-      if (isElevenLabsVoice(preferredVoiceURI)) {
-        const elevenId = elevenLabsVoiceId(preferredVoiceURI);
-        const upcoming: { s: number; spoken: string; startLocal: number }[] = [];
-        for (let s = 0; s < sentences.length; s++) {
-          const sentence = sentences[s];
-          if (sentence.globalStart + sentence.words.length - 1 < from) continue;
-          const startLocal = Math.max(0, from - sentence.globalStart);
-          const spoken = sentence.words
-            .slice(startLocal)
-            .map((word) => word.text)
-            .join(" ")
-            .trim();
-          if (!spoken) continue;
-          upcoming.push({ s, spoken, startLocal });
-        }
-
-        for (let u = 0; u < upcoming.length; u++) {
-          const { s, spoken, startLocal } = upcoming[u];
-          const sentence = sentences[s];
-          if (cancelledRef.current || runIdRef.current !== runId) return;
-          while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
-            await sleep(80);
-          }
-          if (cancelledRef.current || runIdRef.current !== runId) return;
-
-          if (elevenId) {
-            const next = upcoming[u + 1];
-            if (next) {
-              prefetchElevenLabsAudio({
-                text: next.spoken,
-                voiceId: elevenId,
-                speed,
-                language: content.language,
-              });
-            }
-          }
-
-          sentenceCursorRef.current = s;
-          const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
-          if (pIdx >= 0) setParagraphIndex(pIdx);
-          const slice = sentence.words.slice(startLocal);
-          const result = await speakUtterance(spoken, [], {
-            keepAlive: true,
-            onStart: () => activateGlobal(sentence.globalStart + startLocal),
-            onProgress: (elapsedMs, durationMs) => {
-              if (!durationMs) return;
-              const i = Math.min(
-                slice.length - 1,
-                Math.max(0, Math.floor((elapsedMs / durationMs) * slice.length)),
-              );
-              activateGlobal(sentence.globalStart + startLocal + i);
-            },
-          });
-          if (cancelledRef.current || runIdRef.current !== runId) return;
-          if (result === "interrupted") return;
-          if (result === "error") {
-            setVoiceWarning("ElevenLabs could not play that line. Try Play again, or use This device.");
-            return;
-          }
-        }
-        if (runIdRef.current === runId) finishPlayback(runId);
-        return;
-      }
 
       if (!window.speechSynthesis) return;
       const voices = await waitForVoices();
@@ -598,35 +622,14 @@ export function ReadingPlayer({
     primeElevenLabsPlayback();
     const elevenId = elevenLabsVoiceId(preferredVoiceURI);
     if (elevenId && !skipElevenRef.current) {
-      const start = firstWordForParagraph(paragraphIndex);
-      if (playbackStyle === "direct" || playbackStyle === "natural") {
-        const chunks = narrationChunks(paragraphIndex);
-        if (chunks[0]) {
-          prefetchElevenLabsAudio({
-            text: chunks[0].text,
-            voiceId: elevenId,
-            speed,
-            language: content.language,
-          });
-        }
-      } else {
-        const sentence = sentences.find((s) => s.globalStart + s.words.length - 1 >= start);
-        if (sentence) {
-          const startLocal = Math.max(0, start - sentence.globalStart);
-          const spoken = sentence.words
-            .slice(startLocal)
-            .map((w) => w.text)
-            .join(" ")
-            .trim();
-          if (spoken) {
-            prefetchElevenLabsAudio({
-              text: spoken,
-              voiceId: elevenId,
-              speed,
-              language: content.language,
-            });
-          }
-        }
+      const chunks = narrationChunks(paragraphIndex, 1100);
+      if (chunks[0]) {
+        prefetchElevenLabsAudio({
+          text: chunks[0].text,
+          voiceId: elevenId,
+          speed,
+          language: content.language,
+        });
       }
     }
     void speakFromWord(firstWordForParagraph(paragraphIndex));

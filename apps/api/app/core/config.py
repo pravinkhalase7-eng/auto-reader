@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     gemini_tts_model: str = "gemini-3.1-flash-tts-preview"
     gemini_tts_voice: str = "Kore"
     elevenlabs_api_key: str = ""
-    elevenlabs_model: str = "eleven_multilingual_v2"
+    elevenlabs_model: str = "eleven_flash_v2_5"
     elevenlabs_voice_id: str = "Xb7hH8MSUJpSbSDYk0k2"  # Alice — premade classroom voice
 
     pavi_tts_provider: Literal["gemini", "mock"] = "mock"

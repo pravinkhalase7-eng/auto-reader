@@ -210,7 +210,9 @@ def test_elevenlabs_uses_v3_for_marathi():
 
     assert elevenlabs_model_for_language("mr", "eleven_multilingual_v2") == "eleven_v3"
     assert elevenlabs_language_code("mr") == "mr"
-    assert elevenlabs_model_for_language("hi", "eleven_multilingual_v2") == "eleven_multilingual_v2"
+    assert elevenlabs_model_for_language("hi", "eleven_multilingual_v2") == "eleven_flash_v2_5"
+    assert elevenlabs_model_for_language("en", "") == "eleven_flash_v2_5"
+    assert elevenlabs_model_for_language("en", "eleven_turbo_v2_5") == "eleven_turbo_v2_5"
 
 
 def test_elevenlabs_does_not_fall_back_to_hindi_for_marathi():

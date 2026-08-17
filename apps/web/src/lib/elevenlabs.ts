@@ -154,6 +154,18 @@ export function prefetchElevenLabsAudio(opts: SpeakOpts) {
   void fetchElevenLabsAudio(opts).catch(() => undefined);
 }
 
+/** Prefetch several upcoming clips (keeps 1–2 ready ahead of the playhead). */
+export function prefetchElevenLabsAhead(queue: SpeakOpts[], fromIndex: number, ahead = 2) {
+  for (let i = fromIndex; i < Math.min(queue.length, fromIndex + ahead); i++) {
+    prefetchElevenLabsAudio(queue[i]);
+  }
+}
+
+/** Await the first clip so Play doesn't start into an empty buffer. */
+export async function warmElevenLabsFirst(opts: SpeakOpts): Promise<Blob> {
+  return fetchElevenLabsAudio(opts);
+}
+
 function durationMs(audio: HTMLAudioElement, text: string) {
   if (Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration * 1000;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
