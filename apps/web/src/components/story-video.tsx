@@ -25,6 +25,7 @@ import {
   hasNativeVoice,
   waitForVoices,
 } from "@/lib/speech";
+import { convertVideoToMp4, looksLikeMp4 } from "@/lib/video-export";
 import { useReaderStore } from "@/store/reader-store";
 import { cn } from "@/lib/utils";
 import type { LessonContent, StoryIllustration } from "@/types";
@@ -41,35 +42,119 @@ type AudioGraph = {
   ctx: AudioContext;
   dest: MediaStreamAudioDestinationNode;
   gain: GainNode;
+  analyser: AnalyserNode;
   source: AudioBufferSourceNode | null;
   closed: boolean;
+  levels: Uint8Array;
 };
 
-function containImage(
+type MotionState = {
+  sceneIndex: number;
+  prevSceneIndex: number;
+  transitionAt: number;
+  clipStartedAt: number;
+  energy: number;
+  active: boolean;
+};
+
+function easeInOut(t: number) {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+function coverImage(
   ctx: CanvasRenderingContext2D,
   image: HTMLImageElement,
   width: number,
   height: number,
+  zoom: number,
+  panX: number,
+  panY: number,
 ) {
-  const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+  const base = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+  const scale = base * zoom;
   const dw = image.naturalWidth * scale;
   const dh = image.naturalHeight * scale;
-  ctx.drawImage(image, (width - dw) / 2, (height - dh) / 2, dw, dh);
+  const maxX = Math.max(0, (dw - width) / 2);
+  const maxY = Math.max(0, (dh - height) / 2);
+  const dx = (width - dw) / 2 + panX * maxX;
+  const dy = (height - dh) / 2 + panY * maxY;
+  ctx.drawImage(image, dx, dy, dw, dh);
+}
+
+function kenBurnsForScene(sceneIndex: number, elapsedSec: number, energy: number) {
+  const pattern = sceneIndex % 4;
+  const drift = Math.min(1, elapsedSec / 12);
+  const pulse = 1 + energy * 0.045;
+  const zoom = (1.08 + drift * 0.14) * pulse;
+  const sway = Math.sin(elapsedSec * (0.35 + energy * 0.8)) * (0.04 + energy * 0.06);
+  const bob = Math.cos(elapsedSec * (0.45 + energy * 0.5)) * (0.03 + energy * 0.05);
+  switch (pattern) {
+    case 0:
+      return { zoom, panX: -0.55 + drift * 1.1 + sway, panY: -0.25 + bob };
+    case 1:
+      return { zoom, panX: 0.55 - drift * 1.1 + sway, panY: 0.2 + bob };
+    case 2:
+      return { zoom: zoom * 1.02, panX: sway * 0.6, panY: -0.5 + drift * 1.0 + bob };
+    default:
+      return { zoom: zoom * 1.01, panX: -0.2 + drift * 0.5 + sway, panY: 0.35 - drift * 0.7 + bob };
+  }
 }
 
 function drawFrame(
   ctx: CanvasRenderingContext2D,
   opts: {
     image?: HTMLImageElement;
+    prevImage?: HTMLImageElement | null;
     aspect: VideoAspect;
+    sceneIndex: number;
+    elapsedMs: number;
+    transitionAt: number;
+    energy: number;
+    active: boolean;
   },
 ) {
   const { width, height } = videoDimensions(opts.aspect);
   ctx.fillStyle = "#042f2e";
   ctx.fillRect(0, 0, width, height);
-  if (opts.image) {
-    containImage(ctx, opts.image, width, height);
+
+  const now = performance.now();
+  const transitionMs = 700;
+  const t = opts.prevImage
+    ? easeInOut(Math.min(1, Math.max(0, (now - opts.transitionAt) / transitionMs)))
+    : 1;
+  const elapsedSec = Math.max(0, opts.elapsedMs / 1000);
+  const breath = opts.active ? 0.12 + Math.abs(Math.sin(elapsedSec * 2.2)) * 0.1 : 0.05;
+  const energy = Math.min(1, Math.max(opts.energy, opts.active ? breath : 0));
+  const motion = kenBurnsForScene(opts.sceneIndex, elapsedSec, energy);
+
+  if (opts.prevImage && t < 1) {
+    const prevMotion = kenBurnsForScene(opts.sceneIndex - 1, elapsedSec + 0.4, energy * 0.6);
+    ctx.save();
+    ctx.globalAlpha = 1 - t;
+    coverImage(ctx, opts.prevImage, width, height, prevMotion.zoom, prevMotion.panX, prevMotion.panY);
+    ctx.restore();
   }
+
+  if (opts.image) {
+    ctx.save();
+    ctx.globalAlpha = opts.prevImage && t < 1 ? t : 1;
+    coverImage(ctx, opts.image, width, height, motion.zoom, motion.panX, motion.panY);
+    ctx.restore();
+  }
+
+  // Soft vignette so motion feels more cinematic
+  const gradient = ctx.createRadialGradient(
+    width / 2,
+    height / 2,
+    Math.min(width, height) * 0.35,
+    width / 2,
+    height / 2,
+    Math.max(width, height) * 0.72,
+  );
+  gradient.addColorStop(0, "rgba(0,0,0,0)");
+  gradient.addColorStop(1, "rgba(4,47,46,0.28)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
 }
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
@@ -94,14 +179,36 @@ function createAudioGraph(volume: number): AudioGraph {
   const ctx = new Ctor();
   const dest = ctx.createMediaStreamDestination();
   const gain = ctx.createGain();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.75;
   gain.gain.value = Math.min(1, Math.max(0, volume));
+  gain.connect(analyser);
   gain.connect(ctx.destination);
   gain.connect(dest);
   const silence = ctx.createConstantSource();
   silence.offset.value = 0;
   silence.connect(dest);
   silence.start();
-  return { ctx, dest, gain, source: null, closed: false };
+  return {
+    ctx,
+    dest,
+    gain,
+    analyser,
+    source: null,
+    closed: false,
+    levels: new Uint8Array(analyser.frequencyBinCount),
+  };
+}
+
+function readAudioEnergy(graph: AudioGraph | null): number {
+  if (!graph || graph.closed || isAudioClosed(graph.ctx)) return 0;
+  const levels = graph.levels;
+  graph.analyser.getByteFrequencyData(levels as Uint8Array<ArrayBuffer>);
+  let sum = 0;
+  const mid = Math.floor(levels.length * 0.45);
+  for (let i = 2; i < mid; i++) sum += levels[i];
+  return Math.min(1, sum / (mid * 180));
 }
 
 async function playThroughGraph(
@@ -156,7 +263,6 @@ function startRecorder(canvas: HTMLCanvasElement, audio: MediaStream) {
     track.enabled = true;
   });
   const mixed = new MediaStream([...videoTracks, ...audioTracks]);
-  // Prefer containers that keep an audio track (opus). Silent video is usually a mime mismatch.
   const types = [
     "video/webm;codecs=vp8,opus",
     "video/webm;codecs=vp9,opus",
@@ -174,7 +280,6 @@ function startRecorder(canvas: HTMLCanvasElement, audio: MediaStream) {
       };
       if (mime) options.mimeType = mime;
       const recorder = new MediaRecorder(mixed, options);
-      // Smaller timeslice keeps audio/video chunks interleaved for players.
       recorder.start(250);
       return recorder;
     } catch {
@@ -236,6 +341,14 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
   const startedAtRef = useRef(0);
   const aspectRef = useRef<VideoAspect>(aspect);
   const graphRef = useRef<AudioGraph | null>(null);
+  const motionRef = useRef<MotionState>({
+    sceneIndex: 0,
+    prevSceneIndex: -1,
+    transitionAt: 0,
+    clipStartedAt: 0,
+    energy: 0,
+    active: false,
+  });
   const preferredVoiceURI = useReaderStore((s) => s.preferredVoiceURI);
   const volume = useReaderStore((s) => s.volume);
   const speed = useReaderStore((s) => s.speed);
@@ -247,6 +360,16 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
   const size = videoDimensions(aspect);
   aspectRef.current = aspect;
 
+  const setSceneAnimated = (next: number) => {
+    const motion = motionRef.current;
+    if (next === motion.sceneIndex) return;
+    motion.prevSceneIndex = motion.sceneIndex;
+    motion.sceneIndex = next;
+    motion.transitionAt = performance.now();
+    motion.clipStartedAt = performance.now();
+    sceneIndexRef.current = next;
+  };
+
   useEffect(() => {
     if (!open) return;
     const canvas = canvasRef.current;
@@ -256,9 +379,24 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     canvas.height = size.height;
     let raf = 0;
     const tick = () => {
+      const motion = motionRef.current;
+      const liveEnergy = readAudioEnergy(graphRef.current);
+      motion.energy = liveEnergy > 0.02 ? liveEnergy : motion.active ? motion.energy * 0.85 + 0.08 : motion.energy * 0.9;
+      const images = imagesRef.current;
+      const current = images[motion.sceneIndex] ?? images[0];
+      const prev =
+        motion.prevSceneIndex >= 0 && performance.now() - motion.transitionAt < 750
+          ? images[motion.prevSceneIndex]
+          : null;
       drawFrame(ctx, {
-        image: imagesRef.current[sceneIndexRef.current] ?? imagesRef.current[0],
+        image: current,
+        prevImage: prev,
         aspect: aspectRef.current,
+        sceneIndex: motion.sceneIndex,
+        elapsedMs: motion.clipStartedAt ? performance.now() - motion.clipStartedAt : 0,
+        transitionAt: motion.transitionAt,
+        energy: motion.energy,
+        active: motion.active && !pausedRef.current,
       });
       raf = window.requestAnimationFrame(tick);
     };
@@ -276,6 +414,9 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     ).then((images) => {
       imagesRef.current = images.filter((image): image is HTMLImageElement => !!image);
       sceneIndexRef.current = 0;
+      motionRef.current.sceneIndex = 0;
+      motionRef.current.prevSceneIndex = -1;
+      motionRef.current.clipStartedAt = performance.now();
     });
   }, [aspect, open, portraitUrls, scenes, urls]);
 
@@ -357,6 +498,9 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     setSaveProgress(record ? 1 : 0);
     setStatus(record ? "Preparing the story voice..." : "Playing the story video...");
     startedAtRef.current = performance.now();
+    motionRef.current.active = true;
+    motionRef.current.clipStartedAt = performance.now();
+    motionRef.current.energy = 0;
 
     let recorder: MediaRecorder | null = null;
     const chunks: BlobPart[] = [];
@@ -459,11 +603,13 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           0,
           sceneIndexForParagraph(i, paragraphs.length, scenes.length),
         );
+        setSceneAnimated(sceneIndexRef.current);
+        motionRef.current.clipStartedAt = performance.now();
         if (record) {
-          const playPct = 45 + Math.round(((i + 0.5) / paragraphs.length) * 50);
-          setSaveProgress(Math.min(95, playPct));
+          const playPct = 45 + Math.round(((i + 0.5) / paragraphs.length) * 42);
+          setSaveProgress(Math.min(88, playPct));
           setStatus(
-            `Saving video with audio · scene ${i + 1}/${paragraphs.length} · ${Math.min(95, playPct)}%`,
+            `Saving video with audio · scene ${i + 1}/${paragraphs.length} · ${Math.min(88, playPct)}%`,
           );
         }
         const result =
@@ -472,14 +618,14 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
             : await speakChunk(paragraphs[i], runId);
         if (result === "stopped") break;
         if (record) {
-          const donePct = 45 + Math.round(((i + 1) / paragraphs.length) * 50);
-          setSaveProgress(Math.min(96, donePct));
+          const donePct = 45 + Math.round(((i + 1) / paragraphs.length) * 42);
+          setSaveProgress(Math.min(88, donePct));
         }
       }
 
       if (recorder && recorder.state !== "inactive") {
         const activeRecorder = recorder;
-        setSaveProgress(97);
+        setSaveProgress(90);
         setStatus(voiceName ? `Finishing video with ${voiceName}...` : "Finishing video...");
         await new Promise((r) => window.setTimeout(r, 500));
         await new Promise<void>((resolve) => {
@@ -492,10 +638,32 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           }
         });
         if (chunks.length && !stopRef.current) {
-          const mime = activeRecorder.mimeType || "video/webm";
-          const blob = new Blob(chunks, { type: mime });
-          const ext = mime.includes("mp4") ? "mp4" : "webm";
-          const name = `${fileSlug(title)}-${aspect.replace(":", "x")}.${ext}`;
+          let blob = new Blob(chunks, { type: activeRecorder.mimeType || "video/webm" });
+          let name = `${fileSlug(title)}-${aspect.replace(":", "x")}.mp4`;
+
+          if (!looksLikeMp4(blob, activeRecorder.mimeType)) {
+            setSaveProgress(91);
+            setStatus("Converting to MP4...");
+            try {
+              const converted = await convertVideoToMp4(blob, {
+                isCancelled: () => stopRef.current || runIdRef.current !== runId,
+                onProgress: (ratio) => {
+                  setSaveProgress(91 + Math.round(ratio * 8));
+                },
+              });
+              blob = converted.blob;
+            } catch (err) {
+              if (stopRef.current || runIdRef.current !== runId) return;
+              name = `${fileSlug(title)}-${aspect.replace(":", "x")}.webm`;
+              setStatus(
+                err instanceof Error && err.message === "cancelled"
+                  ? "Stopped."
+                  : "MP4 conversion failed, saving WebM instead.",
+              );
+            }
+          }
+
+          if (stopRef.current || runIdRef.current !== runId) return;
           setSaveProgress(100);
           const url = offerDownload(blob, name);
           setReadyFile((prev) => {
@@ -503,7 +671,11 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
             return { url, name };
           });
           savedOk = true;
-          setStatus("Video saved with audio. If the file did not download, tap the link below.");
+          setStatus(
+            name.endsWith(".mp4")
+              ? "MP4 saved with audio and motion. If the file did not download, tap the link below."
+              : "Video saved. If the file did not download, tap the link below.",
+          );
         } else if (!stopRef.current) {
           setStatus("The recorder did not produce a file. Try Chrome, then save again.");
         }
@@ -511,6 +683,8 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Could not save the story video.");
     } finally {
+      motionRef.current.active = false;
+      motionRef.current.energy = 0;
       closeAudioGraph(graph);
       if (graphRef.current === graph) graphRef.current = null;
       if (runIdRef.current === runId) {
@@ -536,6 +710,8 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     cancelSpeech();
     closeAudioGraph(graphRef.current);
     graphRef.current = null;
+    motionRef.current.active = false;
+    motionRef.current.energy = 0;
     setPlaying(false);
     setSaving(false);
     setSaveProgress(0);
@@ -651,13 +827,13 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
                 onClick={() => void runShow(true)}
               >
                 <Download className="h-4 w-4" />
-                {saving ? `Saving ${saveProgress}%` : "Save video"}
+                {saving ? `Saving ${saveProgress}%` : "Save MP4"}
               </Button>
             </div>
             <p className="mt-2 text-xs text-teal-900/60">
-              Play uses the voice selected in the reader. Save downloads one {aspect} file with
-              matching {aspect === "9:16" ? "tall" : "wide"} pictures and that voice mixed in as audio.
-              Pick an ElevenLabs voice first — this device&apos;s voice cannot be stored in the video file.
+              Pictures gently zoom and move with the voice so the story feels like a real video.
+              Save downloads an MP4 ({aspect}) with that motion plus the cloud voice mixed in.
+              Pick an ElevenLabs voice first — this device&apos;s voice cannot be stored in the file.
             </p>
             {readyFile ? (
               <a
