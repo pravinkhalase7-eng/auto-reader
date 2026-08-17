@@ -42,10 +42,8 @@ type AudioGraph = {
   ctx: AudioContext;
   dest: MediaStreamAudioDestinationNode;
   gain: GainNode;
-  analyser: AnalyserNode;
   source: AudioBufferSourceNode | null;
   closed: boolean;
-  levels: Uint8Array;
 };
 
 type MotionState = {
@@ -53,7 +51,6 @@ type MotionState = {
   prevSceneIndex: number;
   transitionAt: number;
   clipStartedAt: number;
-  energy: number;
   active: boolean;
 };
 
@@ -81,22 +78,21 @@ function coverImage(
   ctx.drawImage(image, dx, dy, dw, dh);
 }
 
-function kenBurnsForScene(sceneIndex: number, elapsedSec: number, energy: number) {
+/** Slow cinematic drift only — no per-frame sway (that looked like shaking). */
+function kenBurnsForScene(sceneIndex: number, elapsedSec: number) {
+  // ~14s to finish a gentle move; ease so speed stays even
+  const drift = easeInOut(Math.min(1, elapsedSec / 14));
+  const zoom = 1.06 + drift * 0.1;
   const pattern = sceneIndex % 4;
-  const drift = Math.min(1, elapsedSec / 12);
-  const pulse = 1 + energy * 0.045;
-  const zoom = (1.08 + drift * 0.14) * pulse;
-  const sway = Math.sin(elapsedSec * (0.35 + energy * 0.8)) * (0.04 + energy * 0.06);
-  const bob = Math.cos(elapsedSec * (0.45 + energy * 0.5)) * (0.03 + energy * 0.05);
   switch (pattern) {
     case 0:
-      return { zoom, panX: -0.55 + drift * 1.1 + sway, panY: -0.25 + bob };
+      return { zoom, panX: -0.35 + drift * 0.7, panY: -0.15 + drift * 0.25 };
     case 1:
-      return { zoom, panX: 0.55 - drift * 1.1 + sway, panY: 0.2 + bob };
+      return { zoom, panX: 0.35 - drift * 0.7, panY: 0.12 - drift * 0.2 };
     case 2:
-      return { zoom: zoom * 1.02, panX: sway * 0.6, panY: -0.5 + drift * 1.0 + bob };
+      return { zoom: zoom + 0.02, panX: -0.08 + drift * 0.16, panY: -0.3 + drift * 0.55 };
     default:
-      return { zoom: zoom * 1.01, panX: -0.2 + drift * 0.5 + sway, panY: 0.35 - drift * 0.7 + bob };
+      return { zoom: zoom + 0.01, panX: 0.1 - drift * 0.2, panY: 0.25 - drift * 0.45 };
   }
 }
 
@@ -109,8 +105,6 @@ function drawFrame(
     sceneIndex: number;
     elapsedMs: number;
     transitionAt: number;
-    energy: number;
-    active: boolean;
   },
 ) {
   const { width, height } = videoDimensions(opts.aspect);
@@ -118,17 +112,16 @@ function drawFrame(
   ctx.fillRect(0, 0, width, height);
 
   const now = performance.now();
-  const transitionMs = 700;
+  const transitionMs = 900;
   const t = opts.prevImage
     ? easeInOut(Math.min(1, Math.max(0, (now - opts.transitionAt) / transitionMs)))
     : 1;
   const elapsedSec = Math.max(0, opts.elapsedMs / 1000);
-  const breath = opts.active ? 0.12 + Math.abs(Math.sin(elapsedSec * 2.2)) * 0.1 : 0.05;
-  const energy = Math.min(1, Math.max(opts.energy, opts.active ? breath : 0));
-  const motion = kenBurnsForScene(opts.sceneIndex, elapsedSec, energy);
+  const motion = kenBurnsForScene(opts.sceneIndex, elapsedSec);
 
   if (opts.prevImage && t < 1) {
-    const prevMotion = kenBurnsForScene(opts.sceneIndex - 1, elapsedSec + 0.4, energy * 0.6);
+    // Keep previous scene frozen at its end pose so crossfade doesn't jitter
+    const prevMotion = kenBurnsForScene(Math.max(0, opts.sceneIndex - 1), 14);
     ctx.save();
     ctx.globalAlpha = 1 - t;
     coverImage(ctx, opts.prevImage, width, height, prevMotion.zoom, prevMotion.panX, prevMotion.panY);
@@ -142,17 +135,16 @@ function drawFrame(
     ctx.restore();
   }
 
-  // Soft vignette so motion feels more cinematic
   const gradient = ctx.createRadialGradient(
     width / 2,
     height / 2,
-    Math.min(width, height) * 0.35,
+    Math.min(width, height) * 0.42,
     width / 2,
     height / 2,
-    Math.max(width, height) * 0.72,
+    Math.max(width, height) * 0.78,
   );
   gradient.addColorStop(0, "rgba(0,0,0,0)");
-  gradient.addColorStop(1, "rgba(4,47,46,0.28)");
+  gradient.addColorStop(1, "rgba(4,47,46,0.22)");
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 }
@@ -179,11 +171,7 @@ function createAudioGraph(volume: number): AudioGraph {
   const ctx = new Ctor();
   const dest = ctx.createMediaStreamDestination();
   const gain = ctx.createGain();
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 256;
-  analyser.smoothingTimeConstant = 0.75;
   gain.gain.value = Math.min(1, Math.max(0, volume));
-  gain.connect(analyser);
   gain.connect(ctx.destination);
   gain.connect(dest);
   const silence = ctx.createConstantSource();
@@ -194,21 +182,9 @@ function createAudioGraph(volume: number): AudioGraph {
     ctx,
     dest,
     gain,
-    analyser,
     source: null,
     closed: false,
-    levels: new Uint8Array(analyser.frequencyBinCount),
   };
-}
-
-function readAudioEnergy(graph: AudioGraph | null): number {
-  if (!graph || graph.closed || isAudioClosed(graph.ctx)) return 0;
-  const levels = graph.levels;
-  graph.analyser.getByteFrequencyData(levels as Uint8Array<ArrayBuffer>);
-  let sum = 0;
-  const mid = Math.floor(levels.length * 0.45);
-  for (let i = 2; i < mid; i++) sum += levels[i];
-  return Math.min(1, sum / (mid * 180));
 }
 
 async function playThroughGraph(
@@ -346,7 +322,6 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     prevSceneIndex: -1,
     transitionAt: 0,
     clipStartedAt: 0,
-    energy: 0,
     active: false,
   });
   const preferredVoiceURI = useReaderStore((s) => s.preferredVoiceURI);
@@ -380,12 +355,10 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     let raf = 0;
     const tick = () => {
       const motion = motionRef.current;
-      const liveEnergy = readAudioEnergy(graphRef.current);
-      motion.energy = liveEnergy > 0.02 ? liveEnergy : motion.active ? motion.energy * 0.85 + 0.08 : motion.energy * 0.9;
       const images = imagesRef.current;
       const current = images[motion.sceneIndex] ?? images[0];
       const prev =
-        motion.prevSceneIndex >= 0 && performance.now() - motion.transitionAt < 750
+        motion.prevSceneIndex >= 0 && performance.now() - motion.transitionAt < 950
           ? images[motion.prevSceneIndex]
           : null;
       drawFrame(ctx, {
@@ -395,8 +368,6 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
         sceneIndex: motion.sceneIndex,
         elapsedMs: motion.clipStartedAt ? performance.now() - motion.clipStartedAt : 0,
         transitionAt: motion.transitionAt,
-        energy: motion.energy,
-        active: motion.active && !pausedRef.current,
       });
       raf = window.requestAnimationFrame(tick);
     };
@@ -500,7 +471,6 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     startedAtRef.current = performance.now();
     motionRef.current.active = true;
     motionRef.current.clipStartedAt = performance.now();
-    motionRef.current.energy = 0;
 
     let recorder: MediaRecorder | null = null;
     const chunks: BlobPart[] = [];
@@ -684,7 +654,6 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
       setStatus(err instanceof Error ? err.message : "Could not save the story video.");
     } finally {
       motionRef.current.active = false;
-      motionRef.current.energy = 0;
       closeAudioGraph(graph);
       if (graphRef.current === graph) graphRef.current = null;
       if (runIdRef.current === runId) {
@@ -711,7 +680,6 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     closeAudioGraph(graphRef.current);
     graphRef.current = null;
     motionRef.current.active = false;
-    motionRef.current.energy = 0;
     setPlaying(false);
     setSaving(false);
     setSaveProgress(0);
@@ -831,9 +799,9 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
               </Button>
             </div>
             <p className="mt-2 text-xs text-teal-900/60">
-              Pictures gently zoom and move with the voice so the story feels like a real video.
-              Save downloads an MP4 ({aspect}) with that motion plus the cloud voice mixed in.
-              Pick an ElevenLabs voice first — this device&apos;s voice cannot be stored in the file.
+              Pictures slowly zoom and pan like a story film (no shake). Save downloads an MP4
+              ({aspect}) with that motion plus the cloud voice. Pick an ElevenLabs voice first —
+              this device&apos;s voice cannot be stored in the file.
             </p>
             {readyFile ? (
               <a
