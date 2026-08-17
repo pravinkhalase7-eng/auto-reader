@@ -144,21 +144,38 @@ async function playThroughGraph(
 }
 
 function startRecorder(canvas: HTMLCanvasElement, audio: MediaStream) {
-  const mixed = new MediaStream([
-    ...canvas.captureStream(30).getVideoTracks(),
-    ...audio.getAudioTracks(),
-  ]);
+  const videoTracks = canvas.captureStream(30).getVideoTracks();
+  const audioTracks = audio.getAudioTracks();
+  if (!videoTracks.length) {
+    throw new Error("This browser could not capture the story pictures.");
+  }
+  if (!audioTracks.length) {
+    throw new Error("This browser could not capture the story voice.");
+  }
+  audioTracks.forEach((track) => {
+    track.enabled = true;
+  });
+  const mixed = new MediaStream([...videoTracks, ...audioTracks]);
+  // Prefer containers that keep an audio track (opus). Silent video is usually a mime mismatch.
   const types = [
     "video/webm;codecs=vp8,opus",
     "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,pcm",
     "video/webm",
+    "video/mp4",
     "",
   ];
   for (const mime of types) {
     if (mime && !MediaRecorder.isTypeSupported(mime)) continue;
     try {
-      const recorder = mime ? new MediaRecorder(mixed, { mimeType: mime }) : new MediaRecorder(mixed);
-      recorder.start(200);
+      const options: MediaRecorderOptions = {
+        audioBitsPerSecond: 128_000,
+        videoBitsPerSecond: 2_500_000,
+      };
+      if (mime) options.mimeType = mime;
+      const recorder = new MediaRecorder(mixed, options);
+      // Smaller timeslice keeps audio/video chunks interleaved for players.
+      recorder.start(250);
       return recorder;
     } catch {
       /* try the next mime type */
@@ -206,6 +223,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
   const [open, setOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState(0);
   const [aspect, setAspect] = useState<VideoAspect>("16:9");
   const [status, setStatus] = useState("Pictures on screen, story read aloud.");
   const [readyFile, setReadyFile] = useState<{ url: string; name: string } | null>(null);
@@ -269,6 +287,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     graphRef.current = null;
     setPlaying(false);
     setSaving(false);
+    setSaveProgress(0);
     setReadyFile((prev) => {
       if (prev) URL.revokeObjectURL(prev.url);
       return null;
@@ -335,6 +354,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     cancelSpeech();
     setPlaying(true);
     setSaving(record);
+    setSaveProgress(record ? 1 : 0);
     setStatus(record ? "Preparing the story voice..." : "Playing the story video...");
     startedAtRef.current = performance.now();
 
@@ -342,6 +362,8 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     const chunks: BlobPart[] = [];
     let graph: AudioGraph | null = null;
     let clips: Blob[] | null = null;
+    let voiceName = "";
+    let savedOk = false;
 
     if (record) {
       closeAudioGraph(graphRef.current);
@@ -353,11 +375,13 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
         setStatus("This browser could not open an audio recorder. Try Chrome or Edge.");
         setSaving(false);
         setPlaying(false);
+        setSaveProgress(0);
         return;
       }
     }
 
     try {
+      setSaveProgress(record ? 4 : 0);
       imagesRef.current = await Promise.all(
         scenes.map((scene) => loadImage(sceneMediaUrl(scene.id, aspect, urls, portraitUrls))),
       );
@@ -375,19 +399,23 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           );
           return;
         }
+        voiceName = voice.name;
         const selectedId = elevenLabsVoiceId(preferredVoiceURI);
         setStatus(
           selectedId && selectedId === voice.id
-            ? `Saving ${aspect} video with ${voice.name}...`
-            : `This device's voice cannot be saved. Saving ${aspect} video with ${voice.name}...`,
+            ? `Preparing voice (${voice.name}) for ${aspect} video...`
+            : `This device's voice cannot be saved. Preparing ${voice.name} for ${aspect} video...`,
         );
         clips = [];
-        for (const paragraph of paragraphs) {
+        for (let i = 0; i < paragraphs.length; i++) {
           if (stopRef.current || runIdRef.current !== runId) return;
+          const preparePct = 8 + Math.round(((i + 1) / paragraphs.length) * 32);
+          setSaveProgress(preparePct);
+          setStatus(`Preparing voice ${i + 1}/${paragraphs.length} · ${preparePct}%`);
           try {
             clips.push(
               await fetchElevenLabsAudio({
-                text: paragraph,
+                text: paragraphs[i],
                 voiceId: voice.id,
                 speed,
                 language: content.language,
@@ -404,6 +432,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           return;
         }
         if (audioState(graph.ctx) === "suspended") await graph.ctx.resume();
+        setSaveProgress(42);
         try {
           recorder = startRecorder(canvasRef.current, graph.dest.stream);
         } catch (err) {
@@ -413,7 +442,11 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
         recorder.ondataavailable = (event) => {
           if (event.data.size) chunks.push(event.data);
         };
-        setStatus(`Saving ${aspect} video with ${voice.name}...`);
+        // Let the MediaStream settle so the first audio samples are not dropped.
+        await new Promise((r) => window.setTimeout(r, 350));
+        if (audioState(graph.ctx) === "suspended") await graph.ctx.resume();
+        setStatus(`Saving ${aspect} video with ${voice.name} (with audio)...`);
+        setSaveProgress(45);
       }
 
       for (let i = 0; i < paragraphs.length; i++) {
@@ -426,16 +459,29 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           0,
           sceneIndexForParagraph(i, paragraphs.length, scenes.length),
         );
+        if (record) {
+          const playPct = 45 + Math.round(((i + 0.5) / paragraphs.length) * 50);
+          setSaveProgress(Math.min(95, playPct));
+          setStatus(
+            `Saving video with audio · scene ${i + 1}/${paragraphs.length} · ${Math.min(95, playPct)}%`,
+          );
+        }
         const result =
           record && graph && clips
             ? await playThroughGraph(graph, clips[i], () => stopRef.current || runIdRef.current !== runId)
             : await speakChunk(paragraphs[i], runId);
         if (result === "stopped") break;
+        if (record) {
+          const donePct = 45 + Math.round(((i + 1) / paragraphs.length) * 50);
+          setSaveProgress(Math.min(96, donePct));
+        }
       }
 
       if (recorder && recorder.state !== "inactive") {
         const activeRecorder = recorder;
-        await new Promise((r) => window.setTimeout(r, 400));
+        setSaveProgress(97);
+        setStatus(voiceName ? `Finishing video with ${voiceName}...` : "Finishing video...");
+        await new Promise((r) => window.setTimeout(r, 500));
         await new Promise<void>((resolve) => {
           activeRecorder.onstop = () => resolve();
           try {
@@ -446,14 +492,18 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           }
         });
         if (chunks.length && !stopRef.current) {
-          const blob = new Blob(chunks, { type: activeRecorder.mimeType || "video/webm" });
-          const name = `${fileSlug(title)}-${aspect.replace(":", "x")}.webm`;
+          const mime = activeRecorder.mimeType || "video/webm";
+          const blob = new Blob(chunks, { type: mime });
+          const ext = mime.includes("mp4") ? "mp4" : "webm";
+          const name = `${fileSlug(title)}-${aspect.replace(":", "x")}.${ext}`;
+          setSaveProgress(100);
           const url = offerDownload(blob, name);
           setReadyFile((prev) => {
             if (prev) URL.revokeObjectURL(prev.url);
             return { url, name };
           });
-          setStatus("Video saved. If the file did not download, tap the link below.");
+          savedOk = true;
+          setStatus("Video saved with audio. If the file did not download, tap the link below.");
         } else if (!stopRef.current) {
           setStatus("The recorder did not produce a file. Try Chrome, then save again.");
         }
@@ -467,8 +517,13 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
         cancelSpeech();
         setPlaying(false);
         setSaving(false);
-        if (!record && !stopRef.current) {
-          setStatus("Story finished. Play again whenever you like.");
+        if (!record) {
+          if (!stopRef.current) {
+            setStatus("Story finished. Play again whenever you like.");
+          }
+          setSaveProgress(0);
+        } else if (!savedOk) {
+          setSaveProgress(0);
         }
       }
     }
@@ -483,6 +538,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     graphRef.current = null;
     setPlaying(false);
     setSaving(false);
+    setSaveProgress(0);
     setStatus("Stopped.");
   }
 
@@ -498,7 +554,13 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
     } else {
       window.speechSynthesis.resume();
     }
-    setStatus(pausedRef.current ? "Paused." : saving ? "Saving the story video..." : "Playing the story video...");
+    setStatus(
+      pausedRef.current
+        ? "Paused."
+        : saving
+          ? `Saving the story video${saveProgress ? ` · ${saveProgress}%` : ""}...`
+          : "Playing the story video...",
+    );
   }
 
   if (!canPlay) return null;
@@ -556,6 +618,20 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
                 aspect === "9:16" ? "mx-auto max-h-[58vh] w-auto" : "w-full",
               )}
             />
+            {saving || saveProgress > 0 ? (
+              <div className="mt-3" aria-live="polite">
+                <div className="mb-1 flex items-center justify-between text-xs font-semibold text-teal-900">
+                  <span>{saving ? "Saving video with audio" : "Save complete"}</span>
+                  <span>{Math.min(100, Math.max(0, saveProgress))}%</span>
+                </div>
+                <div className="h-2.5 overflow-hidden rounded-full bg-teal-100">
+                  <div
+                    className="h-full rounded-full bg-teal-600 transition-[width] duration-300 ease-out"
+                    style={{ width: `${Math.min(100, Math.max(0, saveProgress))}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
               <Button disabled={playing} onClick={() => void runShow(false)}>
                 <Play className="h-4 w-4" />
@@ -575,12 +651,12 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
                 onClick={() => void runShow(true)}
               >
                 <Download className="h-4 w-4" />
-                {saving ? "Saving video..." : "Save video"}
+                {saving ? `Saving ${saveProgress}%` : "Save video"}
               </Button>
             </div>
             <p className="mt-2 text-xs text-teal-900/60">
               Play uses the voice selected in the reader. Save downloads one {aspect} file with
-              matching {aspect === "9:16" ? "tall" : "wide"} pictures and that voice mixed in.
+              matching {aspect === "9:16" ? "tall" : "wide"} pictures and that voice mixed in as audio.
               Pick an ElevenLabs voice first — this device&apos;s voice cannot be stored in the video file.
             </p>
             {readyFile ? (
