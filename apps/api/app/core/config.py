@@ -53,10 +53,11 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
     default_timezone: str = "Asia/Kolkata"
     enable_dev_tools: bool = False
-    call_max_retries: int = 2
+    call_max_retries: int = 1
     call_retry_delays_seconds: str = "300,900"
     pavi_context_messages: int = 16
     reminder_scan_interval_seconds: int = 20
+    reminder_inline_scan: bool = True
 
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""

@@ -92,34 +92,14 @@ async def twilio_status(request: Request, db: AsyncSession = Depends(get_db)):
     if not call:
         logger.info("[VOICE_CALL] twilio_sid=%s status=%s unmatched", sid, status)
         return {"ok": True}
-    call.status = status or call.status
-    if status in {"in-progress", "answered"} and not call.answered_at:
-        call.answered_at = now_utc()
-    if status in {"completed", "busy", "failed", "no-answer", "canceled", "cancelled"}:
-        call.completed_at = now_utc()
-        if duration and duration.isdigit():
-            call.duration_seconds = int(duration)
-        reminder = await db.get(Reminder, call.reminder_id) if call.reminder_id else None
-        if reminder and reminder.status == "processing":
-            if status == "completed":
-                reminder.status = "completed"
-                reminder.completed_at = now_utc()
-            elif status in {"busy", "failed", "no-answer", "canceled", "cancelled"}:
-                from app.workers.reminder_tasks import _schedule_retry_or_fail
+    reminder = await db.get(Reminder, call.reminder_id) if call.reminder_id else None
+    duration_val = int(duration) if duration and duration.isdigit() else None
+    if reminder:
+        from app.workers.reminder_tasks import apply_terminal_call_status
 
-                # Keep reminder failed/retry via a lightweight inline update (async).
-                settings = get_settings()
-                reminder.retry_count = (reminder.retry_count or 0) + 1
-                reminder.last_error = status
-                if reminder.retry_count <= settings.call_max_retries:
-                    from datetime import timedelta
-
-                    delays = settings.retry_delay_list
-                    delay_idx = min(reminder.retry_count - 1, len(delays) - 1)
-                    reminder.status = "scheduled"
-                    reminder.reminder_time_utc = now_utc() + timedelta(seconds=delays[delay_idx])
-                else:
-                    reminder.status = "failed"
+        apply_terminal_call_status(reminder, call, status, duration_val)
+    else:
+        call.status = status or call.status
     await db.commit()
     logger.info("[VOICE_CALL] reminder_id=%s twilio_sid=%s status=%s", call.reminder_id, sid, status)
     return {"ok": True}

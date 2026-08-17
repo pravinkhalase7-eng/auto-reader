@@ -52,6 +52,7 @@ services:
       - .env
     environment:
       PYTHONPATH: /app
+      REMINDER_INLINE_SCAN: "false"
     volumes:
       - aiteacher_storage:/app/storage
     healthcheck:

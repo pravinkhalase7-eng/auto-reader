@@ -67,7 +67,7 @@ class ReminderRepository:
             return 0
         conditions = [
             Reminder.user_id == user_id,
-            Reminder.status.in_(["pending", "scheduled", "processing"]),
+            Reminder.status.in_(["pending", "scheduled", "processing", "calling"]),
         ]
         if appointment_id:
             conditions.append(Reminder.appointment_id == appointment_id)

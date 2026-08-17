@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -18,6 +18,12 @@ from app.utils.phone import mask_phone
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger("app.pavi.worker")
+
+ACTIVE_CALL_STATUSES = ("queued", "initiated", "ringing", "in-progress", "answered")
+RETRYABLE_CALL_STATUSES = ("busy", "no-answer")
+TERMINAL_CALL_STATUSES = ("completed", "busy", "failed", "no-answer", "canceled", "cancelled")
+DIALABLE_REMINDER_STATUSES = ("scheduled", "processing")
+IN_FLIGHT_REMINDER_STATUSES = ("processing", "calling")
 
 
 @celery_app.task(name="app.workers.reminder_tasks.process_reminder", bind=True, max_retries=0)
@@ -39,7 +45,7 @@ def _process(session: Session, reminder_id: str) -> str:
     if not reminder:
         logger.warning("[REMINDER] id=%s status=missing", reminder_id)
         return "missing"
-    if reminder.status not in {"processing", "scheduled"}:
+    if reminder.status not in DIALABLE_REMINDER_STATUSES:
         logger.info("[REMINDER] id=%s status=%s skipped", reminder_id, reminder.status)
         return reminder.status
     if reminder.status == "scheduled":
@@ -95,14 +101,28 @@ def _process(session: Session, reminder_id: str) -> str:
 
     existing = session.scalar(
         select(PhoneCall)
-        .where(PhoneCall.reminder_id == reminder.id, PhoneCall.status.in_(["queued", "ringing", "in-progress", "completed"]))
+        .where(PhoneCall.reminder_id == reminder.id)
         .order_by(PhoneCall.created_at.desc())
     )
-    if existing and existing.status == "completed":
-        reminder.status = "completed"
-        reminder.completed_at = now_utc()
+    if existing and _call_already_succeeded(existing):
+        _complete_or_recur(session, reminder)
         session.commit()
-        return "completed"
+        return reminder.status
+    if existing and existing.status in ACTIVE_CALL_STATUSES:
+        logger.info("[VOICE_CALL] reminder_id=%s skipped in-flight status=%s", reminder.id, existing.status)
+        return existing.status
+
+    claimed = session.execute(
+        update(Reminder)
+        .where(Reminder.id == reminder.id, Reminder.status.in_(DIALABLE_REMINDER_STATUSES))
+        .values(status="calling")
+    )
+    if not claimed.rowcount:
+        logger.info("[REMINDER] id=%s skipped already dialing", reminder.id)
+        session.commit()
+        return "calling"
+    reminder.status = "calling"
+    session.commit()
 
     call = PhoneCall(
         user_id=reminder.user_id,
@@ -147,7 +167,43 @@ def _process(session: Session, reminder_id: str) -> str:
         return "failed"
 
 
-def _complete_or_recur(session: Session, reminder: Reminder) -> None:
+def _call_already_succeeded(call: PhoneCall) -> bool:
+    if call.answered_at is not None:
+        return True
+    return call.status == "completed"
+
+
+def apply_terminal_call_status(reminder: Reminder, call: PhoneCall, status: str, duration: int | None = None) -> None:
+    """Update reminder + call from a Twilio status callback. Never redial if already answered."""
+    status = (status or "").lower()
+    if duration is not None:
+        call.duration_seconds = duration
+    if status in {"in-progress", "answered"}:
+        if not call.answered_at:
+            call.answered_at = now_utc()
+        call.status = status
+        return
+    if status not in TERMINAL_CALL_STATUSES:
+        call.status = status or call.status
+        return
+
+    call.status = status
+    call.completed_at = now_utc()
+
+    if reminder.status not in IN_FLIGHT_REMINDER_STATUSES:
+        return
+
+    if status == "completed" or call.answered_at:
+        _complete_or_recur(None, reminder)
+        return
+    if status in RETRYABLE_CALL_STATUSES or status == "failed":
+        _schedule_retry_or_fail(None, reminder, status)
+        return
+    reminder.status = "completed"
+    reminder.completed_at = now_utc()
+
+
+def _complete_or_recur(session: Session | None, reminder: Reminder) -> None:
     if reminder.recurrence_rule:
         reminder.reminder_time_utc = next_recurrence(reminder.reminder_time_utc, reminder.recurrence_rule)
         reminder.status = "scheduled"
@@ -158,7 +214,7 @@ def _complete_or_recur(session: Session, reminder: Reminder) -> None:
         reminder.completed_at = now_utc()
 
 
-def _schedule_retry_or_fail(session: Session, reminder: Reminder, error: str) -> None:
+def _schedule_retry_or_fail(session: Session | None, reminder: Reminder, error: str) -> None:
     settings = get_settings()
     reminder.retry_count = (reminder.retry_count or 0) + 1
     reminder.last_error = error

@@ -60,12 +60,17 @@ async def lifespan(_: FastAPI):
             except TimeoutError:
                 continue
 
-    task = asyncio.create_task(reminder_loop())
+    task = None
+    if settings.reminder_inline_scan:
+        task = asyncio.create_task(reminder_loop())
+    else:
+        logging.getLogger("app.pavi.beat").info("inline reminder scan disabled; Celery beat will place calls")
     try:
         yield
     finally:
         stop.set()
-        task.cancel()
+        if task:
+            task.cancel()
         await engine.dispose()
 
 

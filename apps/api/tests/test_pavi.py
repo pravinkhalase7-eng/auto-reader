@@ -150,6 +150,86 @@ def test_retry_then_fail():
     assert reminder.status == "failed"
 
 
+def test_answered_call_does_not_retry():
+    from app.workers.reminder_tasks import apply_terminal_call_status
+
+    class R:
+        status = "calling"
+        retry_count = 0
+        last_error = None
+        reminder_time_utc = datetime.now(timezone.utc)
+        next_retry_at = None
+        completed_at = None
+        recurrence_rule = None
+        id = "x"
+
+    class C:
+        status = "queued"
+        answered_at = None
+        completed_at = None
+        duration_seconds = None
+
+    reminder = R()
+    call = C()
+    apply_terminal_call_status(reminder, call, "answered")  # type: ignore[arg-type]
+    assert call.answered_at is not None
+    apply_terminal_call_status(reminder, call, "no-answer")  # type: ignore[arg-type]
+    assert reminder.status == "completed"
+    assert reminder.retry_count == 0
+
+
+def test_completed_call_does_not_retry():
+    from app.workers.reminder_tasks import apply_terminal_call_status
+
+    class R:
+        status = "calling"
+        retry_count = 0
+        last_error = None
+        reminder_time_utc = datetime.now(timezone.utc)
+        next_retry_at = None
+        completed_at = None
+        recurrence_rule = None
+        id = "x"
+
+    class C:
+        status = "in-progress"
+        answered_at = datetime.now(timezone.utc)
+        completed_at = None
+        duration_seconds = None
+
+    reminder = R()
+    call = C()
+    apply_terminal_call_status(reminder, call, "completed", duration=12)  # type: ignore[arg-type]
+    assert reminder.status == "completed"
+    assert reminder.retry_count == 0
+
+
+def test_no_answer_retries_once():
+    from app.workers.reminder_tasks import apply_terminal_call_status
+
+    class R:
+        status = "calling"
+        retry_count = 0
+        last_error = None
+        reminder_time_utc = datetime.now(timezone.utc)
+        next_retry_at = None
+        completed_at = None
+        recurrence_rule = None
+        id = "x"
+
+    class C:
+        status = "ringing"
+        answered_at = None
+        completed_at = None
+        duration_seconds = None
+
+    reminder = R()
+    call = C()
+    apply_terminal_call_status(reminder, call, "no-answer")  # type: ignore[arg-type]
+    assert reminder.status == "scheduled"
+    assert reminder.retry_count == 1
+
+
 @pytest.fixture
 async def pavi_client(tmp_path, monkeypatch):
     monkeypatch.setenv("PAVI_AGENT_MODE", "mock")
