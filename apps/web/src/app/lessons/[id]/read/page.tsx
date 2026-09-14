@@ -89,13 +89,20 @@ export default function ReadPage() {
           )}
         </Card>
         <div className="space-y-4">
-          {content ? <ReadingPlayer content={content} audio={audioQuery.data || null} /> : null}
+          {content ? (
+            <ReadingPlayer
+              content={content}
+              audio={audioQuery.data || null}
+              lessonId={id}
+            />
+          ) : null}
           <Card className="bg-amber-50/80">
             <p className="font-display text-xl font-semibold text-teal-950">Listen carefully.</p>
             <p className="mt-2 text-sm text-teal-900/70">
-              <strong>Direct reading</strong> narrates the story like a teacher, with no word
-              highlight. Use <strong>Natural reading</strong> or <strong>Word by word</strong> when
-              you want the spoken word to light up.
+              <strong>Direct reading</strong> narrates the story like a teacher. Use{" "}
+              <strong>Natural</strong> or <strong>Word by word</strong> for highlighting. Try{" "}
+              <strong>Learn in Hindi</strong> to hear each sentence with a simple Hindi meaning, then
+              all hard words together at the end.
             </p>
           </Card>
         </div>

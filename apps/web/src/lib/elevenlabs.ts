@@ -109,11 +109,14 @@ export function clearElevenLabsCache() {
   inflight.clear();
 }
 
-export async function fetchElevenLabsVoices(): Promise<{ enabled: boolean; voices: ElevenLabsVoice[] }> {
+export async function fetchElevenLabsVoices(language = ""): Promise<{ enabled: boolean; voices: ElevenLabsVoice[] }> {
   try {
-    const data = await api<{ elevenlabs: boolean; voices: ElevenLabsVoice[] }>("/tts/voices");
+    const query = language ? `?language=${encodeURIComponent(language)}` : "";
+    const data = await api<{ google?: boolean; elevenlabs?: boolean; voices: ElevenLabsVoice[] }>(
+      `/tts/voices${query}`,
+    );
     const voices = data.voices || [];
-    return { enabled: Boolean(data.elevenlabs || voices.length), voices };
+    return { enabled: Boolean(data.google || data.elevenlabs || voices.length), voices };
   } catch {
     return { enabled: false, voices: [] };
   }

@@ -21,6 +21,9 @@ from app.schemas import (
     EditTextRequest,
     GenerateAudioRequest,
     GenerateQuizRequest,
+    HardWordOut,
+    HindiExplainOut,
+    HindiSentenceExplainOut,
     IllustrationOut,
     IllustrationsOut,
     JobOut,
@@ -326,6 +329,67 @@ async def get_content(lesson_id: str, user: User = Depends(get_current_user), db
         content_type=lesson.content_type,
         summary=lesson.summary,
         sections=sections,
+    )
+
+
+@router.post("/{lesson_id}/explain-hindi", response_model=HindiExplainOut)
+async def explain_hindi(
+    lesson_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Child-friendly Hindi meaning + hard words for each sentence (Learn in Hindi mode)."""
+    lesson = await db.scalar(
+        select(Lesson)
+        .where(Lesson.id == lesson_id, Lesson.deleted_at.is_(None))
+        .options(
+            selectinload(Lesson.sections)
+            .selectinload(LessonSection.paragraphs)
+            .selectinload(LessonParagraph.sentences)
+        )
+    )
+    if not lesson:
+        raise to_http_exception(NotFoundError())
+    if lesson.user_id != user.id and not lesson.is_demo:
+        raise to_http_exception(ForbiddenError())
+
+    sentences: list[dict[str, str]] = []
+    for section in lesson.sections:
+        for paragraph in section.paragraphs:
+            for sent in paragraph.sentences:
+                text = (sent.text or "").strip()
+                if text:
+                    sentences.append({"id": sent.id, "text": text})
+
+    from app.services.hindi_teach import (
+        collect_all_hard_words,
+        explain_sentences_in_hindi,
+        spoken_hard_words_script,
+        spoken_hindi_script,
+    )
+
+    rows = await explain_sentences_in_hindi(
+        title=lesson.title or "Lesson",
+        language=lesson.language or "en",
+        sentences=sentences,
+    )
+    all_hard = collect_all_hard_words(rows)
+    return HindiExplainOut(
+        lesson_id=lesson.id,
+        title=lesson.title,
+        language=lesson.language,
+        sentences=[
+            HindiSentenceExplainOut(
+                id=row["id"],
+                text=row["text"],
+                meaning_hi=row["meaning_hi"],
+                hard_words=[HardWordOut(**hw) for hw in row.get("hard_words") or []],
+                spoken_hi=spoken_hindi_script(row["meaning_hi"]),
+            )
+            for row in rows
+        ],
+        all_hard_words=[HardWordOut(**hw) for hw in all_hard],
+        hard_words_spoken_hi=spoken_hard_words_script(all_hard),
     )
 
 

@@ -58,6 +58,13 @@ async function parseError(res: Response) {
   }
 }
 
+function apiBases(): string[] {
+  // Prefer same-origin proxy; fall back to local API ports if an old UI build is open.
+  const preferred = (API_URL || "/api/v1").replace(/\/$/, "");
+  const extras = ["http://127.0.0.1:8001/api/v1", "http://127.0.0.1:8000/api/v1"];
+  return [preferred, ...extras.filter((b) => b !== preferred)];
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -69,10 +76,32 @@ export async function api<T>(
   }
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
-  if (!res.ok) await parseError(res);
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  let lastErr: unknown;
+  for (const base of apiBases()) {
+    try {
+      const res = await fetch(`${base}${path}`, { ...options, headers });
+      // Same-origin proxy miss on old Next servers returns HTML 404 — try next base.
+      if (res.status === 404 && base.startsWith("/")) {
+        lastErr = new ApiError("API proxy missing on this port.");
+        continue;
+      }
+      if (!res.ok) await parseError(res);
+      if (res.status === 204) return undefined as T;
+      return res.json() as Promise<T>;
+    } catch (err) {
+      lastErr = err;
+      // Network/CORS "Failed to fetch" → try the next base URL.
+      if (err instanceof TypeError || (err instanceof Error && /failed to fetch/i.test(err.message))) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error
+    ? new ApiError(
+        "Cannot reach the API. Use http://127.0.0.1:3003/login (demo@example.com / demo1234).",
+      )
+    : new ApiError("Cannot reach the API. Please retry.");
 }
 
 export async function apiAudio(path: string, body: unknown): Promise<Blob> {

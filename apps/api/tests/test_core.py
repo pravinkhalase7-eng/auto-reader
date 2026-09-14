@@ -251,12 +251,8 @@ def test_elevenlabs_rejected_key_disables_provider(monkeypatch):
 
 
 def test_lesson_tts_uses_gemini_when_elevenlabs_key_rejected(monkeypatch):
-    from app.core.exceptions import AppError
     from app.providers.pavi_tts.base import TTSAudio
     from app.services import lesson_tts
-
-    async def boom(*_args, **_kwargs):
-        raise AppError("The ElevenLabs key on this server is not accepted.", code="ELEVENLABS_UNAUTHORIZED", status_code=502)
 
     class FakeGemini:
         async def synthesize(self, text, *, language="en", voice=None, speak_verbatim=False):
@@ -264,10 +260,10 @@ def test_lesson_tts_uses_gemini_when_elevenlabs_key_rejected(monkeypatch):
             assert language == "mr"
             return TTSAudio(audio_bytes=b"WAV", content_type="audio/wav", provider="gemini", voice="Kore", language="mr")
 
-    monkeypatch.setattr(lesson_tts, "elevenlabs_enabled", lambda: True)
-    monkeypatch.setattr(lesson_tts, "synthesize", boom)
     monkeypatch.setattr(lesson_tts, "gemini_tts_available", lambda: True)
     monkeypatch.setattr(lesson_tts, "GeminiTTSProvider", FakeGemini)
+    monkeypatch.setattr(lesson_tts.google_cloud_tts, "google_cloud_tts_enabled", lambda: False)
+    monkeypatch.setattr(lesson_tts, "elevenlabs_enabled", lambda: False)
 
     import asyncio
 
@@ -283,9 +279,10 @@ def test_lesson_tts_hides_key_error_when_gemini_missing(monkeypatch):
     async def boom(*_args, **_kwargs):
         raise AppError("The ElevenLabs key on this server is not accepted.", code="ELEVENLABS_UNAUTHORIZED", status_code=502)
 
-    monkeypatch.setattr(lesson_tts, "elevenlabs_enabled", lambda: True)
-    monkeypatch.setattr(lesson_tts, "synthesize", boom)
     monkeypatch.setattr(lesson_tts, "gemini_tts_available", lambda: False)
+    monkeypatch.setattr(lesson_tts.google_cloud_tts, "google_cloud_tts_enabled", lambda: False)
+    monkeypatch.setattr(lesson_tts, "elevenlabs_enabled", lambda: True)
+    monkeypatch.setattr(lesson_tts, "elevenlabs_synthesize", boom)
 
     import asyncio
     import pytest

@@ -35,14 +35,20 @@ function LoginForm() {
     setError("");
     const fd = new FormData(e.currentTarget);
     try {
-      const res = await api<{ user: User; access_token: string }>("/auth/login", {
+      const res = await api<{
+        user: User;
+        access_token?: string;
+        accessToken?: string;
+      }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({
           email: fd.get("email"),
           password: fd.get("password"),
         }),
       });
-      setAuth(res.user, res.access_token);
+      const token = res.access_token || res.accessToken;
+      if (!token) throw new Error("Login succeeded but no access token was returned.");
+      setAuth(res.user, token);
       router.push(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in");

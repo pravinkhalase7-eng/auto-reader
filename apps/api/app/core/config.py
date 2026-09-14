@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
 
     database_url: str = "sqlite+aiosqlite:///./ai_teacher.db"
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = (
+        "http://localhost:3000,http://localhost:3001,"
+        "http://127.0.0.1:3000,http://127.0.0.1:3001"
+    )
 
     ai_provider: Literal["local", "gemini", "openai"] = "local"
     ocr_provider: Literal["local", "google", "openai"] = "local"
@@ -32,6 +35,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     google_ai_api_key: str = ""
     google_cloud_api_key: str = ""
+    google_tts_api_key: str = ""
     gemini_api_key: str = ""
     gemini_model: str = "gemini-flash-latest"
     gemini_image_model: str = "gemini-2.5-flash-image"

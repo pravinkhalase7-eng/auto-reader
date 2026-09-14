@@ -424,7 +424,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
           setStatus("Could not play a Marathi voice for this line.");
           return "stopped";
         }
-        setStatus("ElevenLabs could not speak this line. Using this device instead.");
+        setStatus("Google voice could not speak this line. Using this device instead.");
       }
     }
     const voices = await waitForVoices();
@@ -509,7 +509,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
         const voice = await resolveSaveVoice();
         if (!voice) {
           setStatus(
-            "Pick an ElevenLabs voice in the player, then save. This device's voice cannot go into the video file.",
+            "Pick a Google voice in the player, then save. This device's voice cannot go into the video file.",
           );
           return;
         }
@@ -536,7 +536,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
               }),
             );
           } catch {
-            setStatus("I couldn't record the selected voice. Try another ElevenLabs voice, then save again.");
+            setStatus("I couldn't record the selected voice. Try another Google voice, then save again.");
             return;
           }
         }
@@ -800,7 +800,7 @@ export function StoryVideo({ title, content, scenes, urls, portraitUrls = {} }: 
             </div>
             <p className="mt-2 text-xs text-teal-900/60">
               Pictures slowly zoom and pan like a story film (no shake). Save downloads an MP4
-              ({aspect}) with that motion plus the cloud voice. Pick an ElevenLabs voice first —
+              ({aspect}) with that motion plus the cloud voice. Pick a Google voice first —
               this device&apos;s voice cannot be stored in the file.
             </p>
             {readyFile ? (

@@ -202,6 +202,28 @@ class GenerateQuizRequest(BaseModel):
     count: int = Field(default=6, ge=3, le=15)
 
 
+class HardWordOut(BaseModel):
+    word: str
+    meaning_hi: str
+
+
+class HindiSentenceExplainOut(BaseModel):
+    id: str
+    text: str
+    meaning_hi: str
+    hard_words: list[HardWordOut]
+    spoken_hi: str
+
+
+class HindiExplainOut(BaseModel):
+    lesson_id: str
+    title: str
+    language: str
+    sentences: list[HindiSentenceExplainOut]
+    all_hard_words: list[HardWordOut] = []
+    hard_words_spoken_hi: str = ""
+
+
 class QuestionOptionOut(BaseModel):
     id: str
     label: str

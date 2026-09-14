@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_current_user
 from app.core.exceptions import AppError, to_http_exception
 from app.models import User
-from app.services.elevenlabs import elevenlabs_enabled, list_voices
-from app.services.lesson_tts import cloud_voices, speak_lesson
+from app.services.google_cloud_tts import google_cloud_tts_enabled
+from app.services.lesson_tts import cloud_voices, gemini_tts_available, speak_lesson
 
 router = APIRouter(prefix="/tts", tags=["tts"])
 
@@ -19,11 +19,14 @@ class SpeakRequest(BaseModel):
 
 
 @router.get("/voices")
-async def tts_voices(_: User = Depends(get_current_user)):
-    voices = await list_voices() if elevenlabs_enabled() else []
-    if voices:
-        return {"elevenlabs": True, "voices": voices}
-    return {"elevenlabs": False, "voices": cloud_voices()}
+async def tts_voices(_: User = Depends(get_current_user), language: str = ""):
+    voices = cloud_voices(language)
+    cloud_on = bool(voices) and (google_cloud_tts_enabled() or gemini_tts_available())
+    return {
+        "google": cloud_on,
+        "elevenlabs": False,
+        "voices": voices,
+    }
 
 
 @router.post("/speak")

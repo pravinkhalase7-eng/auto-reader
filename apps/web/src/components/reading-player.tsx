@@ -11,7 +11,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useReaderStore } from "@/store/reader-store";
-import type { AudioAsset, LessonContent, SpeedOption } from "@/types";
+import type {
+  AudioAsset,
+  HardWordExplain,
+  HindiExplainResponse,
+  HindiSentenceExplain,
+  LessonContent,
+  SpeedOption,
+} from "@/types";
 import { cn } from "@/lib/utils";
 import {
   buildUtterance,
@@ -26,7 +33,7 @@ import {
   voiceOptionLabel,
   type SpeechExpression,
 } from "@/lib/speech";
-import { ApiError } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import {
   elevenLabsVoiceId,
   elevenLabsVoiceURI,
@@ -116,9 +123,11 @@ function sleep(ms: number) {
 
 export function ReadingPlayer({
   content,
+  lessonId,
 }: {
   content: LessonContent;
   audio: AudioAsset | null;
+  lessonId: string;
 }) {
   const {
     mode,
@@ -150,6 +159,11 @@ export function ReadingPlayer({
   const [hasDeviceMarathi, setHasDeviceMarathi] = useState(false);
   const [elevenVoices, setElevenVoices] = useState<ElevenLabsVoice[]>([]);
   const [elevenEnabled, setElevenEnabled] = useState(false);
+  const [teachLoading, setTeachLoading] = useState(false);
+  const [teachNote, setTeachNote] = useState<string | null>(null);
+  const [activeTeach, setActiveTeach] = useState<HindiSentenceExplain | null>(null);
+  const [reviewHardWords, setReviewHardWords] = useState<HardWordExplain[] | null>(null);
+  const teachCacheRef = useRef<HindiExplainResponse | null>(null);
 
   const cancelledRef = useRef(false);
   const pausedRef = useRef(false);
@@ -173,7 +187,7 @@ export function ReadingPlayer({
       setHasDeviceMarathi(nativeMr);
       setAvailableVoices(voicesForLanguage(content.language, voices));
     });
-    fetchElevenLabsVoices().then((result) => {
+    fetchElevenLabsVoices(content.language).then((result) => {
       if (cancelled) return;
       setElevenEnabled(result.enabled);
       setElevenVoices(result.voices);
@@ -219,16 +233,22 @@ export function ReadingPlayer({
         expression?: SpeechExpression;
         keepAlive?: boolean;
         onProgress?: (elapsedMs: number, durationMs: number) => void;
+        language?: string;
+        voiceId?: string | null;
       },
     ) => {
-      const elevenId = elevenLabsVoiceId(preferredVoiceURI);
+      const speakLang = handlers?.language || content.language;
+      const elevenId =
+        handlers?.voiceId !== undefined
+          ? handlers.voiceId
+          : elevenLabsVoiceId(preferredVoiceURI);
       if (elevenId && !skipElevenRef.current) {
         try {
           return await playElevenLabsSpeech({
             text,
             voiceId: elevenId,
             speed,
-            language: content.language,
+            language: speakLang,
             volume,
             onStart: handlers?.onStart,
             onProgress: handlers?.onProgress,
@@ -237,12 +257,15 @@ export function ReadingPlayer({
         } catch (err) {
           const unauthorized =
             err instanceof ApiError &&
-            (err.code === "ELEVENLABS_UNAUTHORIZED" || /key on this server is not accepted/i.test(err.message));
+            (err.code === "ELEVENLABS_UNAUTHORIZED" ||
+              err.code === "GOOGLE_TTS_UNAUTHORIZED" ||
+              /key on this server is not accepted/i.test(err.message) ||
+              /not allowed for Cloud Text-to-Speech/i.test(err.message));
           const message = unauthorized
-            ? "The extra ElevenLabs voice isn't available. Using a Marathi cloud voice instead."
+            ? "The Google cloud voice isn't available. Check GOOGLE_AI_API_KEY / GOOGLE_CLOUD_API_KEY."
             : err instanceof ApiError || err instanceof Error
               ? err.message
-              : "I couldn't use the Marathi cloud voice this time.";
+              : "I couldn't use the Google cloud voice this time.";
           if (content.language === "mr" || unauthorized) {
             setVoiceWarning(message);
             return "error";
@@ -255,13 +278,13 @@ export function ReadingPlayer({
       const browserVoices = voices.length ? voices : await waitForVoices();
       if (content.language === "mr" && !hasNativeVoice("mr", browserVoices)) {
         setVoiceWarning(
-          "This device has no Marathi voice. Choose Marathi voice so pronunciation sounds like मराठी.",
+          "This device has no Marathi voice. Choose Google voice so pronunciation sounds like मराठी.",
         );
         return "error";
       }
       return new Promise<"ended" | "error" | "interrupted">((resolve) => {
         const { utterance, warning } = buildUtterance(text, {
-          language: content.language,
+          language: speakLang,
           speed,
           volume,
           voices: browserVoices,
@@ -463,7 +486,7 @@ export function ReadingPlayer({
         if (cancelledRef.current || runIdRef.current !== runId) return;
         if (result === "interrupted") return;
         if (result === "error" && usingEleven) {
-          setVoiceWarning("ElevenLabs could not play that line. Try Play again, or use This device.");
+            setVoiceWarning("Google voice could not play that line. Try Play again, or use This device.");
           return;
         }
         await waitIfActive(usingEleven ? 40 : 220, runId);
@@ -491,6 +514,170 @@ export function ReadingPlayer({
     ],
   );
 
+  /** Learn in Hindi: read sentence → Hindi meaning; hard words only at the end. */
+  const ensureTeachGuide = useCallback(async () => {
+    if (teachCacheRef.current) return teachCacheRef.current;
+    setTeachLoading(true);
+    setTeachNote("हिंदी में समझा रहा हूँ… Preparing Hindi help…");
+    try {
+      const data = await api<HindiExplainResponse>(`/lessons/${lessonId}/explain-hindi`, {
+        method: "POST",
+      });
+      teachCacheRef.current = data;
+      setTeachNote(null);
+      return data;
+    } catch (err) {
+      const message =
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : "Hindi help could not load.";
+      setTeachNote(message);
+      throw err;
+    } finally {
+      setTeachLoading(false);
+    }
+  }, [lessonId]);
+
+  const speakLearnHindi = useCallback(
+    async (startWord: number) => {
+      if (typeof window === "undefined") return;
+      if (mode === "read") {
+        setPlaying(true);
+        return;
+      }
+
+      const runId = ++runIdRef.current;
+      cancelledRef.current = false;
+      pausedRef.current = false;
+      setPlaying(true);
+      cancelSpeech();
+      primeElevenLabsPlayback();
+      await sleep(40);
+
+      let guide: HindiExplainResponse;
+      try {
+        guide = await ensureTeachGuide();
+      } catch {
+        setPlaying(false);
+        return;
+      }
+      if (cancelledRef.current || runIdRef.current !== runId) return;
+
+      const tipById = new Map<string, HindiSentenceExplain>();
+      for (const row of guide.sentences || []) tipById.set(row.id, row);
+
+      const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
+      const voices = isElevenLabsVoice(preferredVoiceURI) ? [] : await waitForVoices();
+      const hindiVoiceOpts = {
+        language: "hi" as const,
+        ...(isElevenLabsVoice(preferredVoiceURI) ? { voiceId: "hi-IN-Neural2-A" } : {}),
+      };
+
+      setReviewHardWords(null);
+
+      for (let s = 0; s < sentences.length; s++) {
+        const sentence = sentences[s];
+        if (sentence.globalStart + sentence.words.length - 1 < from) continue;
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        while (pausedRef.current && !cancelledRef.current && runIdRef.current === runId) {
+          await sleep(80);
+        }
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+
+        sentenceCursorRef.current = s;
+        const pIdx = paragraphs.findIndex((p) => p.id === sentence.paragraphId);
+        if (pIdx >= 0) setParagraphIndex(pIdx);
+        activateGlobal(sentence.globalStart);
+
+        const tip = tipById.get(sentence.id) || null;
+        setActiveTeach(tip);
+
+        // 1) Read the story sentence in the lesson language
+        const storyResult = await speakUtterance(sentence.text, voices, {
+          keepAlive: true,
+          onStart: () => activateGlobal(sentence.globalStart),
+          onProgress: (elapsedMs, durationMs) => {
+            if (!durationMs || !sentence.words.length) return;
+            const i = Math.min(
+              sentence.words.length - 1,
+              Math.max(0, Math.floor((elapsedMs / durationMs) * sentence.words.length)),
+            );
+            activateGlobal(sentence.globalStart + i);
+          },
+        });
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        if (storyResult === "interrupted") return;
+
+        await waitIfActive(350, runId);
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+
+        // 2) Explain meaning only in Hindi (hard words come after the full story)
+        const hindi =
+          tip?.spoken_hi?.trim() ||
+          tip?.meaning_hi?.trim() ||
+          `इस वाक्य का आसान मतलब यह है: ${sentence.text}`;
+        const explainResult = await speakUtterance(hindi, voices, {
+          keepAlive: true,
+          ...hindiVoiceOpts,
+          onStart: () => activateGlobal(sentence.globalStart),
+        });
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        if (explainResult === "interrupted") return;
+        await waitIfActive(450, runId);
+      }
+
+      // 3) All hard words together at the end
+      if (cancelledRef.current || runIdRef.current !== runId) return;
+      const hardList = guide.all_hard_words?.length
+        ? guide.all_hard_words
+        : Array.from(
+            new Map(
+              (guide.sentences || [])
+                .flatMap((row) => row.hard_words || [])
+                .map((hw) => [hw.word.toLowerCase(), hw] as const),
+            ).values(),
+          );
+      const hardSpoken =
+        guide.hard_words_spoken_hi?.trim() ||
+        (hardList.length
+          ? `अब कहानी के मुश्किल शब्द समझते हैं। ${hardList
+              .map((hw) => `${hw.word} का मतलब है: ${hw.meaning_hi}।`)
+              .join(" ")}`
+          : "");
+
+      if (hardSpoken) {
+        setActiveTeach(null);
+        setReviewHardWords(hardList);
+        await waitIfActive(500, runId);
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        const hardResult = await speakUtterance(hardSpoken, voices, {
+          keepAlive: true,
+          ...hindiVoiceOpts,
+        });
+        if (cancelledRef.current || runIdRef.current !== runId) return;
+        if (hardResult === "interrupted") return;
+      }
+
+      if (runIdRef.current === runId) {
+        finishPlayback(runId);
+      }
+    },
+    [
+      activateGlobal,
+      ensureTeachGuide,
+      finishPlayback,
+      mode,
+      paragraphs,
+      preferredVoiceURI,
+      sentences,
+      setParagraphIndex,
+      setPlaying,
+      speakUtterance,
+      waitIfActive,
+      words.length,
+    ],
+  );
+
   /** One spoken word = one highlighted word. Cloud voices use continuous chunks instead. */
   const speakFromWord = useCallback(
     async (startWord: number) => {
@@ -500,12 +687,17 @@ export function ReadingPlayer({
         return;
       }
 
+      if (playbackStyle === "learn_hindi") {
+        await speakLearnHindi(startWord);
+        return;
+      }
+
       let para = 0;
       for (let i = 0; i < paragraphs.length; i++) {
         if (startWord >= paragraphs[i].startWord) para = i;
       }
 
-      // ElevenLabs: never speak sentence-by-sentence — that is what caused buffering
+      // Cloud voices: continuous chunks (except Learn in Hindi, handled above)
       if (isElevenLabsVoice(preferredVoiceURI) && !skipElevenRef.current) {
         await speakDirect(para);
         return;
@@ -597,6 +789,7 @@ export function ReadingPlayer({
       setParagraphIndex,
       setPlaying,
       speakDirect,
+      speakLearnHindi,
       speakUtterance,
       speed,
       waitIfActive,
@@ -614,6 +807,8 @@ export function ReadingPlayer({
     pausedRef.current = false;
     runIdRef.current += 1;
     cancelWordPreview();
+    setActiveTeach(null);
+    setReviewHardWords(null);
     setPlaying(false);
   }, [setPlaying]);
 
@@ -655,6 +850,13 @@ export function ReadingPlayer({
     primeElevenLabsPlayback();
     window.setTimeout(() => void speakFromWord(0), 60);
   };
+
+  useEffect(() => {
+    teachCacheRef.current = null;
+    setActiveTeach(null);
+    setReviewHardWords(null);
+    setTeachNote(null);
+  }, [lessonId]);
 
   useEffect(() => () => stopAll(), [stopAll]);
 
@@ -736,7 +938,57 @@ export function ReadingPlayer({
         >
           Word by word
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            stopAll();
+            setActiveTeach(null);
+            setReviewHardWords(null);
+            setTeachNote(null);
+            setPlaybackStyle("learn_hindi");
+          }}
+          className={cn(
+            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            playbackStyle === "learn_hindi" ? "bg-rose-600 text-white" : "bg-rose-50 text-rose-950",
+          )}
+        >
+          Learn in Hindi
+        </button>
       </div>
+
+      {playbackStyle === "learn_hindi" ? (
+        <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50/80 p-3 text-sm text-rose-950">
+          <p className="font-semibold">हिंदी में सीखो</p>
+          <p className="mt-1 text-xs text-rose-900/80">
+            Press Play: each sentence is read, then its meaning in simple Hindi. Hard words are
+            explained together at the end.
+          </p>
+          {teachLoading ? <p className="mt-2 text-xs font-medium">Preparing Hindi help…</p> : null}
+          {teachNote ? <p className="mt-2 text-xs text-rose-800">{teachNote}</p> : null}
+          {activeTeach ? (
+            <div className="mt-2 space-y-2">
+              <p>
+                <span className="font-semibold">Sentence:</span> {activeTeach.text}
+              </p>
+              <p>
+                <span className="font-semibold">अर्थ:</span> {activeTeach.meaning_hi}
+              </p>
+            </div>
+          ) : null}
+          {reviewHardWords?.length ? (
+            <div className="mt-2 space-y-2">
+              <p className="font-semibold">मुश्किल शब्द (Hard words)</p>
+              <ul className="list-disc space-y-1 pl-5 text-xs">
+                {reviewHardWords.map((hw) => (
+                  <li key={hw.word}>
+                    <strong>{hw.word}</strong> — {hw.meaning_hi}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <p className="mb-1 text-xs font-semibold text-teal-800/80">Voice</p>
       <div className="mb-3 flex flex-wrap gap-2">
@@ -769,12 +1021,12 @@ export function ReadingPlayer({
             isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
           )}
         >
-          {content.language === "mr" ? "Marathi voice" : "ElevenLabs"}
+          {content.language === "mr" ? "Marathi Google voice" : "Google voice"}
         </button>
       </div>
       {isElevenLabsVoice(preferredVoiceURI) && elevenVoices.length > 1 ? (
         <label className="mb-3 flex flex-col gap-1 text-sm text-teal-900">
-          ElevenLabs voice
+          Google voice
           <select
             className="rounded-xl border border-teal-900/15 bg-white px-2 py-1.5"
             value={preferredVoiceURI ?? ""}
@@ -784,7 +1036,7 @@ export function ReadingPlayer({
               setVoiceWarning(null);
               setPreferredVoiceURI(e.target.value || null);
             }}
-            aria-label="ElevenLabs voice"
+            aria-label="Google voice"
           >
             {elevenVoices.map((voice) => (
               <option key={voice.id} value={elevenLabsVoiceURI(voice.id)}>
@@ -796,7 +1048,7 @@ export function ReadingPlayer({
           <span className="text-xs font-normal text-teal-800/70">
             {content.language === "mr"
               ? "Cloud Marathi voice — this phone’s Hindi voice will not be used."
-              : "Classroom voices that work with a free ElevenLabs key. Voice Library voices need a paid plan."}
+              : "Google Cloud Text-to-Speech (falls back to Gemini TTS if needed)."}
           </span>
         </label>
       ) : null}
@@ -822,7 +1074,7 @@ export function ReadingPlayer({
       ) : null}
       {!elevenEnabled && content.language !== "mr" ? (
         <p className="mb-3 text-xs text-amber-800">
-          ElevenLabs did not load. Refresh this page after the API has the key.
+          Google voice did not load. Add GOOGLE_TTS_API_KEY, then refresh.
         </p>
       ) : null}
       {content.language === "mr" && !hasDeviceMarathi && isElevenLabsVoice(preferredVoiceURI) ? (

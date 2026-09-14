@@ -147,7 +147,24 @@ export type Dashboard = {
   completed_count: number;
 };
 
+export type HardWordExplain = { word: string; meaning_hi: string };
+export type HindiSentenceExplain = {
+  id: string;
+  text: string;
+  meaning_hi: string;
+  hard_words: HardWordExplain[];
+  spoken_hi: string;
+};
+export type HindiExplainResponse = {
+  lesson_id: string;
+  title: string;
+  language: string;
+  sentences: HindiSentenceExplain[];
+  all_hard_words: HardWordExplain[];
+  hard_words_spoken_hi: string;
+};
+
 export type ReadingMode = "listen" | "read" | "listen_read";
 export type SpeedOption = "very_slow" | "slow" | "normal" | "fast";
-/** natural = word highlight + pauses; word = karaoke; direct = fluent narration, no highlight */
-export type PlaybackStyle = "natural" | "word" | "direct";
+/** natural = word highlight + pauses; word = karaoke; direct = fluent; learn_hindi = sentence + Hindi meaning */
+export type PlaybackStyle = "natural" | "word" | "direct" | "learn_hindi";
