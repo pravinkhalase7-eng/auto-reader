@@ -18,6 +18,8 @@ body {
     radial-gradient(900px 500px at 100% 0%, #ffe8b5 0%, transparent 50%),
     linear-gradient(180deg, #eef5f1 0%, #e7f1ec 40%, #f7f3ea 100%);
   min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
   font-family: var(--font-sans), "Nunito", system-ui, sans-serif;
 }
 

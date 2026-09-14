@@ -159,6 +159,8 @@ export type HindiExplainResponse = {
   lesson_id: string;
   title: string;
   language: string;
+  /** hi = Learn in Hindi, mr = Learn in Marathi (meanings still in meaning_hi fields) */
+  target_language?: "hi" | "mr";
   sentences: HindiSentenceExplain[];
   all_hard_words: HardWordExplain[];
   hard_words_spoken_hi: string;
@@ -166,5 +168,6 @@ export type HindiExplainResponse = {
 
 export type ReadingMode = "listen" | "read" | "listen_read";
 export type SpeedOption = "very_slow" | "slow" | "normal" | "fast";
-/** natural = word highlight + pauses; word = karaoke; direct = fluent; learn_hindi = sentence + Hindi meaning */
-export type PlaybackStyle = "natural" | "word" | "direct" | "learn_hindi";
+/** natural = word highlight + pauses; word = karaoke; direct = fluent; learn_* = sentence + mother-tongue meaning */
+export type PlaybackStyle = "natural" | "word" | "direct" | "learn_hindi" | "learn_marathi";
+export type TeachLanguage = "hi" | "mr";

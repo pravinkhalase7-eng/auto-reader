@@ -378,6 +378,7 @@ async def explain_hindi(
         lesson_id=lesson.id,
         title=lesson.title,
         language=lesson.language,
+        target_language="hi",
         sentences=[
             HindiSentenceExplainOut(
                 id=row["id"],
@@ -389,6 +390,74 @@ async def explain_hindi(
             for row in rows
         ],
         all_hard_words=[HardWordOut(**hw) for hw in all_hard],
+        hard_words_spoken_hi=spoken_hard_words_script(all_hard),
+    )
+
+
+@router.post("/{lesson_id}/explain-marathi", response_model=HindiExplainOut)
+async def explain_marathi(
+    lesson_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Child-friendly Marathi meaning + hard words for each sentence (Learn in Marathi mode)."""
+    lesson = await db.scalar(
+        select(Lesson)
+        .where(Lesson.id == lesson_id, Lesson.deleted_at.is_(None))
+        .options(
+            selectinload(Lesson.sections)
+            .selectinload(LessonSection.paragraphs)
+            .selectinload(LessonParagraph.sentences)
+        )
+    )
+    if not lesson:
+        raise to_http_exception(NotFoundError())
+    if lesson.user_id != user.id and not lesson.is_demo:
+        raise to_http_exception(ForbiddenError())
+
+    sentences: list[dict[str, str]] = []
+    for section in lesson.sections:
+        for paragraph in section.paragraphs:
+            for sent in paragraph.sentences:
+                text = (sent.text or "").strip()
+                if text:
+                    sentences.append({"id": sent.id, "text": text})
+
+    from app.services.marathi_teach import (
+        collect_all_hard_words,
+        explain_sentences_in_marathi,
+        spoken_hard_words_script,
+        spoken_marathi_script,
+    )
+
+    rows = await explain_sentences_in_marathi(
+        title=lesson.title or "Lesson",
+        language=lesson.language or "en",
+        sentences=sentences,
+    )
+    all_hard = collect_all_hard_words(rows)
+    # Reuse HindiExplainOut shape: meaning_hi/spoken_hi hold Marathi text; target_language=mr.
+    return HindiExplainOut(
+        lesson_id=lesson.id,
+        title=lesson.title,
+        language=lesson.language,
+        target_language="mr",
+        sentences=[
+            HindiSentenceExplainOut(
+                id=row["id"],
+                text=row["text"],
+                meaning_hi=row["meaning_mr"],
+                hard_words=[
+                    HardWordOut(word=hw["word"], meaning_hi=hw["meaning_mr"])
+                    for hw in row.get("hard_words") or []
+                ],
+                spoken_hi=spoken_marathi_script(row["meaning_mr"]),
+            )
+            for row in rows
+        ],
+        all_hard_words=[
+            HardWordOut(word=hw["word"], meaning_hi=hw["meaning_mr"]) for hw in all_hard
+        ],
         hard_words_spoken_hi=spoken_hard_words_script(all_hard),
     )
 

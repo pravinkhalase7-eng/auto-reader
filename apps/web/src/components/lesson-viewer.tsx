@@ -204,7 +204,7 @@ export function LessonViewer({
 
       <div ref={scrollPane} data-lesson-scroll className="min-h-0 flex-1 overflow-y-visible lg:overflow-y-auto pr-1">
         <p className="mb-3 text-xs text-teal-800/70">
-          Hover a word, or click it, to hear how it sounds.
+          Tap a word to hear how it sounds.
         </p>
         <article
           className="prose-lesson max-w-none"

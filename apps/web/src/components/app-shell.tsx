@@ -58,18 +58,18 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
             </Button>
           </div>
         </div>
-        <nav className="flex justify-around gap-0 overflow-x-auto border-t border-teal-900/5 px-1 py-1.5 md:hidden" aria-label="Mobile">
+        <nav className="flex justify-around gap-0 border-t border-teal-900/5 px-1 py-1.5 md:hidden" aria-label="Mobile">
           {links.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               className={cn(
-                "flex flex-col items-center gap-1 rounded-lg px-3 py-1 text-[11px] font-medium text-teal-900/60",
+                "flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-medium text-teal-900/60 sm:text-[11px]",
                 pathname.startsWith(href) && "text-teal-800",
               )}
             >
-              <Icon className="h-5 w-5" />
-              {label}
+              <Icon className="h-5 w-5 shrink-0" />
+              <span className="max-w-full truncate">{label === "New story" ? "Upload" : label}</span>
             </Link>
           ))}
         </nav>
@@ -79,7 +79,7 @@ export function AppShell({ children, compact }: { children: React.ReactNode; com
           "mx-auto w-full px-3 md:px-4",
           compact
             ? "flex min-h-0 flex-1 flex-col overflow-hidden py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
-            : "max-w-6xl py-6 md:py-10",
+            : "max-w-6xl py-4 pb-[max(5.5rem,env(safe-area-inset-bottom))] md:py-10 md:pb-10",
         )}
       >
         {compact ? <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col">{children}</div> : children}

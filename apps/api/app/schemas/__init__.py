@@ -219,6 +219,7 @@ class HindiExplainOut(BaseModel):
     lesson_id: str
     title: str
     language: str
+    target_language: str = "hi"
     sentences: list[HindiSentenceExplainOut]
     all_hard_words: list[HardWordOut] = []
     hard_words_spoken_hi: str = ""

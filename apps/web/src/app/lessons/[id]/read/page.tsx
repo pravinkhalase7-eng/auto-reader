@@ -47,7 +47,7 @@ export default function ReadPage() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-teal-800/70">AI Teacher</p>
-          <h1 className="font-display text-3xl font-bold text-teal-950">
+          <h1 className="font-display break-words text-2xl font-bold text-teal-950 sm:text-3xl">
             {content?.title || "Reading..."}
           </h1>
           <p className="text-teal-900/70">Let&apos;s read this together!</p>
@@ -77,7 +77,25 @@ export default function ReadPage() {
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[1.5fr_0.9fr]">
-        <Card className="flex min-h-0 flex-1 flex-col overflow-visible p-4 md:p-8 lg:max-h-[70vh] lg:overflow-hidden">
+        <div className="order-1 space-y-4 lg:order-2">
+          {content ? (
+            <ReadingPlayer
+              content={content}
+              audio={audioQuery.data || null}
+              lessonId={id}
+            />
+          ) : null}
+          <Card className="hidden bg-amber-50/80 sm:block">
+            <p className="font-display text-xl font-semibold text-teal-950">Listen carefully.</p>
+            <p className="mt-2 text-sm text-teal-900/70">
+              <strong>Direct reading</strong> narrates the story like a teacher. Use{" "}
+              <strong>Natural</strong> or <strong>Word by word</strong> for highlighting. Try{" "}
+              <strong>Learn in Hindi</strong> or <strong>Learn in Marathi</strong> for mother-tongue
+              meanings, then practice hard words with flashcards.
+            </p>
+          </Card>
+        </div>
+        <Card className="order-2 flex min-h-0 flex-1 flex-col overflow-visible p-4 md:p-8 lg:order-1 lg:max-h-[70vh] lg:overflow-hidden">
           {content ? (
             <LessonViewer
               content={content}
@@ -88,24 +106,6 @@ export default function ReadPage() {
             <p>Preparing your lesson...</p>
           )}
         </Card>
-        <div className="space-y-4">
-          {content ? (
-            <ReadingPlayer
-              content={content}
-              audio={audioQuery.data || null}
-              lessonId={id}
-            />
-          ) : null}
-          <Card className="bg-amber-50/80">
-            <p className="font-display text-xl font-semibold text-teal-950">Listen carefully.</p>
-            <p className="mt-2 text-sm text-teal-900/70">
-              <strong>Direct reading</strong> narrates the story like a teacher. Use{" "}
-              <strong>Natural</strong> or <strong>Word by word</strong> for highlighting. Try{" "}
-              <strong>Learn in Hindi</strong> to hear each sentence with a simple Hindi meaning, then
-              all hard words together at the end.
-            </p>
-          </Card>
-        </div>
       </div>
     </AppShell>
   );

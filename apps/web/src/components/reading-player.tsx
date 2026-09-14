@@ -18,7 +18,9 @@ import type {
   HindiSentenceExplain,
   LessonContent,
   SpeedOption,
+  TeachLanguage,
 } from "@/types";
+import { HardWordFlashcards } from "@/components/hard-word-flashcards";
 import { cn } from "@/lib/utils";
 import {
   buildUtterance,
@@ -163,7 +165,10 @@ export function ReadingPlayer({
   const [teachNote, setTeachNote] = useState<string | null>(null);
   const [activeTeach, setActiveTeach] = useState<HindiSentenceExplain | null>(null);
   const [reviewHardWords, setReviewHardWords] = useState<HardWordExplain[] | null>(null);
-  const teachCacheRef = useRef<HindiExplainResponse | null>(null);
+  const [flashcardsOpen, setFlashcardsOpen] = useState(false);
+  const [flashcardLang, setFlashcardLang] = useState<TeachLanguage>("hi");
+  const [flashcardWords, setFlashcardWords] = useState<HardWordExplain[]>([]);
+  const teachCacheRef = useRef<Partial<Record<TeachLanguage, HindiExplainResponse>>>({});
 
   const cancelledRef = useRef(false);
   const pausedRef = useRef(false);
@@ -514,32 +519,44 @@ export function ReadingPlayer({
     ],
   );
 
-  /** Learn in Hindi: read sentence → Hindi meaning; hard words only at the end. */
-  const ensureTeachGuide = useCallback(async () => {
-    if (teachCacheRef.current) return teachCacheRef.current;
-    setTeachLoading(true);
-    setTeachNote("हिंदी में समझा रहा हूँ… Preparing Hindi help…");
-    try {
-      const data = await api<HindiExplainResponse>(`/lessons/${lessonId}/explain-hindi`, {
-        method: "POST",
-      });
-      teachCacheRef.current = data;
-      setTeachNote(null);
-      return data;
-    } catch (err) {
-      const message =
-        err instanceof ApiError || err instanceof Error
-          ? err.message
-          : "Hindi help could not load.";
-      setTeachNote(message);
-      throw err;
-    } finally {
-      setTeachLoading(false);
-    }
-  }, [lessonId]);
+  /** Learn in Hindi/Marathi: read sentence → mother-tongue meaning; hard words only at the end. */
+  const ensureTeachGuide = useCallback(
+    async (lang: TeachLanguage) => {
+      const cached = teachCacheRef.current[lang];
+      if (cached) return cached;
+      setTeachLoading(true);
+      setTeachNote(
+        lang === "mr"
+          ? "मराठीत समजावून सांगत आहे… Preparing Marathi help…"
+          : "हिंदी में समझा रहा हूँ… Preparing Hindi help…",
+      );
+      try {
+        const path =
+          lang === "mr"
+            ? `/lessons/${lessonId}/explain-marathi`
+            : `/lessons/${lessonId}/explain-hindi`;
+        const data = await api<HindiExplainResponse>(path, { method: "POST" });
+        teachCacheRef.current[lang] = data;
+        setTeachNote(null);
+        return data;
+      } catch (err) {
+        const message =
+          err instanceof ApiError || err instanceof Error
+            ? err.message
+            : lang === "mr"
+              ? "Marathi help could not load."
+              : "Hindi help could not load.";
+        setTeachNote(message);
+        throw err;
+      } finally {
+        setTeachLoading(false);
+      }
+    },
+    [lessonId],
+  );
 
-  const speakLearnHindi = useCallback(
-    async (startWord: number) => {
+  const speakLearnMotherTongue = useCallback(
+    async (startWord: number, lang: TeachLanguage) => {
       if (typeof window === "undefined") return;
       if (mode === "read") {
         setPlaying(true);
@@ -556,7 +573,7 @@ export function ReadingPlayer({
 
       let guide: HindiExplainResponse;
       try {
-        guide = await ensureTeachGuide();
+        guide = await ensureTeachGuide(lang);
       } catch {
         setPlaying(false);
         return;
@@ -568,12 +585,19 @@ export function ReadingPlayer({
 
       const from = Math.max(0, Math.min(startWord, Math.max(0, words.length - 1)));
       const voices = isElevenLabsVoice(preferredVoiceURI) ? [] : await waitForVoices();
-      const hindiVoiceOpts = {
-        language: "hi" as const,
-        ...(isElevenLabsVoice(preferredVoiceURI) ? { voiceId: "hi-IN-Neural2-A" } : {}),
-      };
+      const motherVoiceOpts =
+        lang === "mr"
+          ? {
+              language: "mr" as const,
+              ...(isElevenLabsVoice(preferredVoiceURI) ? { voiceId: "mr-IN-Wavenet-A" } : {}),
+            }
+          : {
+              language: "hi" as const,
+              ...(isElevenLabsVoice(preferredVoiceURI) ? { voiceId: "hi-IN-Neural2-A" } : {}),
+            };
 
       setReviewHardWords(null);
+      setFlashcardsOpen(false);
 
       for (let s = 0; s < sentences.length; s++) {
         const sentence = sentences[s];
@@ -592,7 +616,6 @@ export function ReadingPlayer({
         const tip = tipById.get(sentence.id) || null;
         setActiveTeach(tip);
 
-        // 1) Read the story sentence in the lesson language
         const storyResult = await speakUtterance(sentence.text, voices, {
           keepAlive: true,
           onStart: () => activateGlobal(sentence.globalStart),
@@ -611,14 +634,15 @@ export function ReadingPlayer({
         await waitIfActive(350, runId);
         if (cancelledRef.current || runIdRef.current !== runId) return;
 
-        // 2) Explain meaning only in Hindi (hard words come after the full story)
-        const hindi =
-          tip?.spoken_hi?.trim() ||
-          tip?.meaning_hi?.trim() ||
-          `इस वाक्य का आसान मतलब यह है: ${sentence.text}`;
-        const explainResult = await speakUtterance(hindi, voices, {
+        const fallbackMeaning =
+          lang === "mr"
+            ? `या वाक्याचा सोपा अर्थ असा आहे: ${sentence.text}`
+            : `इस वाक्य का आसान मतलब यह है: ${sentence.text}`;
+        const meaning =
+          tip?.spoken_hi?.trim() || tip?.meaning_hi?.trim() || fallbackMeaning;
+        const explainResult = await speakUtterance(meaning, voices, {
           keepAlive: true,
-          ...hindiVoiceOpts,
+          ...motherVoiceOpts,
           onStart: () => activateGlobal(sentence.globalStart),
         });
         if (cancelledRef.current || runIdRef.current !== runId) return;
@@ -626,7 +650,6 @@ export function ReadingPlayer({
         await waitIfActive(450, runId);
       }
 
-      // 3) All hard words together at the end
       if (cancelledRef.current || runIdRef.current !== runId) return;
       const hardList = guide.all_hard_words?.length
         ? guide.all_hard_words
@@ -640,25 +663,32 @@ export function ReadingPlayer({
       const hardSpoken =
         guide.hard_words_spoken_hi?.trim() ||
         (hardList.length
-          ? `अब कहानी के मुश्किल शब्द समझते हैं। ${hardList
-              .map((hw) => `${hw.word} का मतलब है: ${hw.meaning_hi}।`)
-              .join(" ")}`
+          ? lang === "mr"
+            ? `आता गोष्टीतील कठीण शब्द समजून घेऊया. ${hardList
+                .map((hw) => `${hw.word} म्हणजे: ${hw.meaning_hi}.`)
+                .join(" ")}`
+            : `अब कहानी के मुश्किल शब्द समझते हैं। ${hardList
+                .map((hw) => `${hw.word} का मतलब है: ${hw.meaning_hi}।`)
+                .join(" ")}`
           : "");
 
       if (hardSpoken) {
         setActiveTeach(null);
         setReviewHardWords(hardList);
+        setFlashcardLang(lang);
+        setFlashcardWords(hardList);
         await waitIfActive(500, runId);
         if (cancelledRef.current || runIdRef.current !== runId) return;
         const hardResult = await speakUtterance(hardSpoken, voices, {
           keepAlive: true,
-          ...hindiVoiceOpts,
+          ...motherVoiceOpts,
         });
         if (cancelledRef.current || runIdRef.current !== runId) return;
         if (hardResult === "interrupted") return;
       }
 
       if (runIdRef.current === runId) {
+        if (hardList.length) setFlashcardsOpen(true);
         finishPlayback(runId);
       }
     },
@@ -678,6 +708,30 @@ export function ReadingPlayer({
     ],
   );
 
+  const openHardWordFlashcards = useCallback(
+    async (lang: TeachLanguage) => {
+      try {
+        const guide = await ensureTeachGuide(lang);
+        const hardList = guide.all_hard_words?.length
+          ? guide.all_hard_words
+          : Array.from(
+              new Map(
+                (guide.sentences || [])
+                  .flatMap((row) => row.hard_words || [])
+                  .map((hw) => [hw.word.toLowerCase(), hw] as const),
+              ).values(),
+            );
+        setFlashcardLang(lang);
+        setFlashcardWords(hardList);
+        setFlashcardsOpen(true);
+        setReviewHardWords(hardList);
+      } catch {
+        /* teachNote already set */
+      }
+    },
+    [ensureTeachGuide],
+  );
+
   /** One spoken word = one highlighted word. Cloud voices use continuous chunks instead. */
   const speakFromWord = useCallback(
     async (startWord: number) => {
@@ -688,7 +742,11 @@ export function ReadingPlayer({
       }
 
       if (playbackStyle === "learn_hindi") {
-        await speakLearnHindi(startWord);
+        await speakLearnMotherTongue(startWord, "hi");
+        return;
+      }
+      if (playbackStyle === "learn_marathi") {
+        await speakLearnMotherTongue(startWord, "mr");
         return;
       }
 
@@ -697,7 +755,7 @@ export function ReadingPlayer({
         if (startWord >= paragraphs[i].startWord) para = i;
       }
 
-      // Cloud voices: continuous chunks (except Learn in Hindi, handled above)
+      // Cloud voices: continuous chunks (except Learn in Hindi/Marathi, handled above)
       if (isElevenLabsVoice(preferredVoiceURI) && !skipElevenRef.current) {
         await speakDirect(para);
         return;
@@ -789,7 +847,7 @@ export function ReadingPlayer({
       setParagraphIndex,
       setPlaying,
       speakDirect,
-      speakLearnHindi,
+      speakLearnMotherTongue,
       speakUtterance,
       speed,
       waitIfActive,
@@ -852,9 +910,11 @@ export function ReadingPlayer({
   };
 
   useEffect(() => {
-    teachCacheRef.current = null;
+    teachCacheRef.current = {};
     setActiveTeach(null);
     setReviewHardWords(null);
+    setFlashcardsOpen(false);
+    setFlashcardWords([]);
     setTeachNote(null);
   }, [lessonId]);
 
@@ -875,7 +935,7 @@ export function ReadingPlayer({
           : ((activeIndex + 1) / words.length) * 100;
 
   return (
-    <div className="rounded-3xl border border-teal-900/10 bg-white/95 p-4 shadow-lg">
+    <div className="rounded-3xl border border-teal-900/10 bg-white/95 p-3 shadow-lg sm:p-4">
       <div className="mb-3 flex flex-wrap gap-2">
         {(
           [
@@ -889,7 +949,7 @@ export function ReadingPlayer({
             type="button"
             onClick={() => setMode(value)}
             className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-semibold",
+              "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
               mode === value ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
             )}
           >
@@ -906,7 +966,7 @@ export function ReadingPlayer({
             setPlaybackStyle("direct");
           }}
           className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
             playbackStyle === "direct" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
           )}
         >
@@ -919,7 +979,7 @@ export function ReadingPlayer({
             setPlaybackStyle("natural");
           }}
           className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
             playbackStyle === "natural" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
           )}
         >
@@ -932,7 +992,7 @@ export function ReadingPlayer({
             setPlaybackStyle("word");
           }}
           className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
             playbackStyle === "word" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-950",
           )}
         >
@@ -944,49 +1004,132 @@ export function ReadingPlayer({
             stopAll();
             setActiveTeach(null);
             setReviewHardWords(null);
+            setFlashcardsOpen(false);
             setTeachNote(null);
             setPlaybackStyle("learn_hindi");
           }}
           className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
             playbackStyle === "learn_hindi" ? "bg-rose-600 text-white" : "bg-rose-50 text-rose-950",
           )}
         >
           Learn in Hindi
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            stopAll();
+            setActiveTeach(null);
+            setReviewHardWords(null);
+            setFlashcardsOpen(false);
+            setTeachNote(null);
+            setPlaybackStyle("learn_marathi");
+          }}
+          className={cn(
+            "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
+            playbackStyle === "learn_marathi" ? "bg-orange-600 text-white" : "bg-orange-50 text-orange-950",
+          )}
+        >
+          Learn in Marathi
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const lang: TeachLanguage =
+              playbackStyle === "learn_marathi" ? "mr" : "hi";
+            void openHardWordFlashcards(lang);
+          }}
+          className="min-h-11 rounded-full bg-violet-50 px-3.5 py-2.5 text-sm font-semibold text-violet-950"
+        >
+          Hard-word flashcards
+        </button>
       </div>
 
-      {playbackStyle === "learn_hindi" ? (
-        <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50/80 p-3 text-sm text-rose-950">
-          <p className="font-semibold">हिंदी में सीखो</p>
-          <p className="mt-1 text-xs text-rose-900/80">
-            Press Play: each sentence is read, then its meaning in simple Hindi. Hard words are
-            explained together at the end.
+      {playbackStyle === "learn_hindi" || playbackStyle === "learn_marathi" ? (
+        <div
+          className={cn(
+            "mb-3 rounded-2xl border p-3 text-sm",
+            playbackStyle === "learn_marathi"
+              ? "border-orange-200 bg-orange-50/80 text-orange-950"
+              : "border-rose-200 bg-rose-50/80 text-rose-950",
+          )}
+        >
+          <p className="font-semibold">
+            {playbackStyle === "learn_marathi" ? "मराठीत शिका" : "हिंदी में सीखो"}
           </p>
-          {teachLoading ? <p className="mt-2 text-xs font-medium">Preparing Hindi help…</p> : null}
-          {teachNote ? <p className="mt-2 text-xs text-rose-800">{teachNote}</p> : null}
+          <p
+            className={cn(
+              "mt-1 text-xs",
+              playbackStyle === "learn_marathi" ? "text-orange-900/80" : "text-rose-900/80",
+            )}
+          >
+            Press Play: each sentence is read, then its meaning in simple{" "}
+            {playbackStyle === "learn_marathi" ? "Marathi" : "Hindi"}. Hard words are explained
+            together at the end, then you can practice with flashcards.
+          </p>
+          {teachLoading ? (
+            <p className="mt-2 text-xs font-medium">
+              {playbackStyle === "learn_marathi"
+                ? "Preparing Marathi help…"
+                : "Preparing Hindi help…"}
+            </p>
+          ) : null}
+          {teachNote ? (
+            <p
+              className={cn(
+                "mt-2 text-xs",
+                playbackStyle === "learn_marathi" ? "text-orange-800" : "text-rose-800",
+              )}
+            >
+              {teachNote}
+            </p>
+          ) : null}
           {activeTeach ? (
             <div className="mt-2 space-y-2">
               <p>
                 <span className="font-semibold">Sentence:</span> {activeTeach.text}
               </p>
               <p>
-                <span className="font-semibold">अर्थ:</span> {activeTeach.meaning_hi}
+                <span className="font-semibold">
+                  {playbackStyle === "learn_marathi" ? "अर्थ:" : "अर्थ:"}
+                </span>{" "}
+                {activeTeach.meaning_hi}
               </p>
             </div>
           ) : null}
           {reviewHardWords?.length ? (
             <div className="mt-2 space-y-2">
-              <p className="font-semibold">मुश्किल शब्द (Hard words)</p>
-              <ul className="list-disc space-y-1 pl-5 text-xs">
+              <p className="font-semibold">
+                {playbackStyle === "learn_marathi"
+                  ? "कठीण शब्द (Hard words)"
+                  : "मुश्किल शब्द (Hard words)"}
+              </p>
+              <ul className="max-h-36 list-disc space-y-1 overflow-y-auto pl-5 text-xs">
                 {reviewHardWords.map((hw) => (
                   <li key={hw.word}>
                     <strong>{hw.word}</strong> — {hw.meaning_hi}
                   </li>
                 ))}
               </ul>
+              <button
+                type="button"
+                onClick={() => setFlashcardsOpen(true)}
+                className="text-xs font-semibold underline"
+              >
+                Practice with flashcards
+              </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {flashcardsOpen ? (
+        <div className="mb-3">
+          <HardWordFlashcards
+            words={flashcardWords}
+            language={flashcardLang}
+            onClose={() => setFlashcardsOpen(false)}
+          />
         </div>
       ) : null}
 
@@ -1000,7 +1143,7 @@ export function ReadingPlayer({
               setPreferredVoiceURI(availableVoices[0]?.voiceURI ?? null);
             }}
             className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-semibold",
+              "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
               !isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
             )}
           >
@@ -1017,7 +1160,7 @@ export function ReadingPlayer({
             setPreferredVoiceURI(elevenLabsVoiceURI(first));
           }}
           className={cn(
-            "rounded-full px-3 py-1.5 text-xs font-semibold",
+            "min-h-11 rounded-full px-3.5 py-2.5 text-sm font-semibold",
             isElevenLabsVoice(preferredVoiceURI) ? "bg-teal-700 text-white" : "bg-teal-50 text-teal-900",
           )}
         >
@@ -1096,7 +1239,7 @@ export function ReadingPlayer({
         </p>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-center gap-2">
+      <div className="sticky bottom-2 z-20 -mx-1 mt-2 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-teal-900/10 bg-white/95 px-2 py-2 shadow-md backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-none">
         <Button
           variant="outline"
           size="icon"
@@ -1142,11 +1285,11 @@ export function ReadingPlayer({
         </Button>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+      <div className="mt-4 flex flex-col gap-3 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <label className="flex items-center gap-2 text-teal-900">
           Speed
           <select
-            className="rounded-xl border border-teal-900/15 bg-white px-2 py-1"
+            className="min-h-11 rounded-xl border border-teal-900/15 bg-white px-3 py-2"
             value={speed}
             onChange={(e) => setSpeed(e.target.value as SpeedOption)}
             aria-label="Reading speed"
@@ -1157,8 +1300,8 @@ export function ReadingPlayer({
             <option value="fast">Fast</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 text-teal-900">
-          <Volume2 className="h-4 w-4" />
+        <label className="flex min-w-0 flex-1 items-center gap-2 text-teal-900">
+          <Volume2 className="h-4 w-4 shrink-0" />
           <input
             type="range"
             min={0}
@@ -1167,6 +1310,7 @@ export function ReadingPlayer({
             value={volume}
             onChange={(e) => setVolume(Number(e.target.value))}
             aria-label="Volume"
+            className="h-11 w-full min-w-[8rem] max-w-xs accent-teal-700"
           />
         </label>
       </div>
