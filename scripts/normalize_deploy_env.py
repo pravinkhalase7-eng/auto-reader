@@ -116,6 +116,26 @@ def main() -> int:
         if base and (not webhook or "localhost" in webhook or "127.0.0.1" in webhook):
             rows = upsert(rows, "TWILIO_WEBHOOK_BASE_URL", base)
             print(f"TWILIO_WEBHOOK_BASE_URL set to {base}")
+        # Ensure CORS includes the browser origin for this public URL
+        if base.startswith("http://") or base.startswith("https://"):
+            origins = {
+                o.strip()
+                for o in (data.get("CORS_ORIGINS") or "").split(",")
+                if o.strip()
+            }
+            origins.add(base)
+            # Also allow direct :3000 access on the same host
+            try:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(base)
+                if parsed.hostname and not parsed.port:
+                    origins.add(f"{parsed.scheme}://{parsed.hostname}:3000")
+            except Exception:
+                pass
+            merged = ",".join(sorted(origins))
+            rows = upsert(rows, "CORS_ORIGINS", merged)
+            print(f"CORS_ORIGINS updated for public URL ({len(origins)} origins)")
 
     user = (data.get("POSTGRES_USER") or "aiteacher").strip() or "aiteacher"
     password = data.get("POSTGRES_PASSWORD") or ""

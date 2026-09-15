@@ -262,7 +262,7 @@ Then rebuild.''')
 
           echo "Freeing previous AI Teacher containers (if any)..."
           docker compose -f docker-compose.yml down --remove-orphans || true
-          docker rm -f aiteacher-api aiteacher-web aiteacher-postgres aiteacher-redis aiteacher-celery-worker aiteacher-celery-beat 2>/dev/null || true
+          docker rm -f aiteacher-api aiteacher-web aiteacher-nginx aiteacher-postgres aiteacher-redis aiteacher-celery-worker aiteacher-celery-beat 2>/dev/null || true
 
           echo "Starting Postgres first..."
           docker compose -f docker-compose.yml up -d --no-build postgres
@@ -287,8 +287,8 @@ Then rebuild.''')
             exit 1
           fi
 
-          echo "Starting API, web, Redis, and Pavi Celery workers from the images just built..."
-          docker compose -f docker-compose.yml up -d --no-build --force-recreate redis api web celery-worker celery-beat
+          echo "Starting API, web, nginx, Redis, and Pavi Celery workers from the images just built..."
+          docker compose -f docker-compose.yml up -d --no-build --force-recreate redis api web nginx celery-worker celery-beat
           echo "=== aiteacher-api DATABASE_URL inside container ==="
           docker exec aiteacher-api printenv DATABASE_URL || true
           echo "=== aiteacher-postgres POSTGRES_PASSWORD inside container ==="
@@ -300,6 +300,9 @@ Then rebuild.''')
             if docker exec aiteacher-api curl -fsS http://127.0.0.1:8000/api/v1/health >/tmp/aiteacher_health.json 2>/dev/null; then
               echo "API healthy"
               cat /tmp/aiteacher_health.json
+              echo
+              echo "Checking nginx → API..."
+              docker exec aiteacher-nginx wget -qO- http://127.0.0.1/api/v1/health || true
               echo
               docker compose -f docker-compose.yml ps
               exit 0

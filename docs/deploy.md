@@ -22,24 +22,37 @@ This project follows the same Jenkins → Docker Compose pattern as **Option-Tra
 4. Set in that file:
    - `SECRET_KEY`
    - `POSTGRES_PASSWORD` / matching `DATABASE_URL`
-   - `CORS_ORIGINS=http://YOUR_VPS_IP:3000`
-   - `NEXT_PUBLIC_API_URL=http://YOUR_VPS_IP:8000/api/v1`
+   - `CORS_ORIGINS=http://doxstation.com,http://doxstation.com:3000,http://YOUR_VPS_IP:3000`
+   - `NEXT_PUBLIC_API_URL=http://doxstation.com/api/v1` (via nginx on port 80)
+   - `TWILIO_WEBHOOK_BASE_URL=http://doxstation.com`
    - `GOOGLE_AI_API_KEY` (required for story pictures; not `GOOGLE_API_KEY`)
-5. Run the job. Optional parameters:
+5. Open the VPS firewall for **80** (nginx), and optionally **3000** / **8000** for direct debug.
+6. Run the job. Optional parameters:
    - `SKIP_DEPLOY` — build + smoke only
    - `FORCE_RECREATE` — recreate containers
    - `RESET_POSTGRES` — **leave unchecked**. Checking it deletes the Postgres volume and wipes users, lessons, and reminders. Use only after a password/`InvalidPasswordError` reset when you want an empty database.
-   - `PUBLIC_API_URL` — override browser API URL for this build
+   - `PUBLIC_API_URL` — override browser API URL for this build (also refreshes CORS / Twilio base)
 
 ## After deploy
 
 | Service | URL |
 |---------|-----|
-| UI | `http://YOUR_VPS_IP:3000` |
-| API docs | `http://YOUR_VPS_IP:8000/docs` |
+| UI (recommended) | `http://doxstation.com/` or `http://YOUR_VPS_IP/` |
+| UI (direct) | `http://YOUR_VPS_IP:3000` |
+| API via nginx | `http://doxstation.com/api/v1/health` |
+| API docs (direct) | `http://YOUR_VPS_IP:8000/docs` |
 | Health | `http://YOUR_VPS_IP:8000/api/v1/health` |
 
 Demo login (if seed enabled): `demo@example.com` / `demo1234`
+
+## Nginx
+
+Compose service `nginx` (`aiteacher-nginx`) listens on **`NGINX_HOST_PORT` (default 80)**:
+
+- `/` → `web:3000`
+- `/api/` → `api:8000`
+
+Config: [`deploy/nginx/default.conf`](../deploy/nginx/default.conf). No TLS yet — add certificates later (Caddy/certbot) if you want `https://`.
 
 ## Manual deploy (without Jenkins)
 

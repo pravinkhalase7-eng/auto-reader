@@ -131,6 +131,29 @@ services:
     networks:
       - aiteacher
 
+  # Public entry on :80 — http://doxstation.com/ → web, /api → API
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: aiteacher-nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    ports:
+      - "${NGINX_HOST_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/v1/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    networks:
+      - aiteacher
+
 volumes:
   aiteacher_pgdata:
     name: aiteacher_pgdata
