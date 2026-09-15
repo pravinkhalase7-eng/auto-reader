@@ -131,31 +131,6 @@ services:
     networks:
       - aiteacher
 
-  # Public entry on :80 — http://doxstation.com/ → web, /api → API
-  # Image embeds default.conf (bind mounts break when Jenkins uses the host Docker socket).
-  nginx:
-    build:
-      context: ./deploy/nginx
-      dockerfile: Dockerfile
-    image: aiteacher-nginx:${IMAGE_TAG:-latest}
-    container_name: aiteacher-nginx
-    restart: unless-stopped
-    depends_on:
-      api:
-        condition: service_healthy
-      web:
-        condition: service_started
-    ports:
-      - "${NGINX_HOST_PORT:-80}:80"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/v1/health"]
-      interval: 20s
-      timeout: 5s
-      retries: 8
-      start_period: 15s
-    networks:
-      - aiteacher
-
 volumes:
   aiteacher_pgdata:
     name: aiteacher_pgdata
