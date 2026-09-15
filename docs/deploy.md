@@ -11,6 +11,20 @@ This project follows the same Jenkins → Docker Compose pattern as **Option-Tra
 5. `docker compose up -d` on the VPS agent
 6. Health-check API via `docker exec aiteacher-api curl .../api/v1/health`
 
+## Public domain (doxstation.com)
+
+Host **:80** is owned by **aicoder-nginx** (`play.doxstation.com`). AI Teacher does **not** bind port 80.
+
+`aicoder-nginx` proxies:
+
+| Host | Path | Target |
+|------|------|--------|
+| `doxstation.com` | `/` | `host.docker.internal:3000` (aiteacher-web) |
+| `doxstation.com` | `/api/` | `host.docker.internal:8000` (aiteacher-api) |
+| `play.doxstation.com` | `/` + `/api/` | AI Coder stack |
+
+After changing aicoder nginx config, rebuild/restart `aicoder-nginx` on the VPS, then rebuild AI Teacher with `PUBLIC_API_URL=http://doxstation.com/api/v1`.
+
 ## Jenkins setup
 
 1. Install Docker + Docker Compose on the Jenkins agent (or use Jenkins-in-Docker with Docker socket mount — same as NiftySense).
@@ -22,20 +36,22 @@ This project follows the same Jenkins → Docker Compose pattern as **Option-Tra
 4. Set in that file:
    - `SECRET_KEY`
    - `POSTGRES_PASSWORD` / matching `DATABASE_URL`
-   - `CORS_ORIGINS=http://YOUR_VPS_IP:3000`
-   - `NEXT_PUBLIC_API_URL=http://YOUR_VPS_IP:8000/api/v1`
+   - `CORS_ORIGINS=http://doxstation.com,http://www.doxstation.com,http://187.127.138.86:3000`
+   - `NEXT_PUBLIC_API_URL=http://doxstation.com/api/v1`
    - `GOOGLE_AI_API_KEY` (required for story pictures; not `GOOGLE_API_KEY`)
 5. Run the job. Optional parameters:
    - `SKIP_DEPLOY` — build + smoke only
    - `FORCE_RECREATE` — recreate containers
    - `RESET_POSTGRES` — **leave unchecked**. Checking it deletes the Postgres volume and wipes users, lessons, and reminders. Use only after a password/`InvalidPasswordError` reset when you want an empty database.
-   - `PUBLIC_API_URL` — override browser API URL for this build
+   - `PUBLIC_API_URL` — override browser API URL for this build (default `http://doxstation.com/api/v1`)
 
 ## After deploy
 
 | Service | URL |
 |---------|-----|
-| UI | `http://YOUR_VPS_IP:3000` |
+| UI (domain) | `http://doxstation.com` |
+| API (domain) | `http://doxstation.com/api/v1` |
+| UI (direct) | `http://YOUR_VPS_IP:3000` |
 | API docs | `http://YOUR_VPS_IP:8000/docs` |
 | Health | `http://YOUR_VPS_IP:8000/api/v1/health` |
 
@@ -45,7 +61,7 @@ Demo login (if seed enabled): `demo@example.com` / `demo1234`
 
 ```bash
 cp aiteacher.env.example .env
-# edit .env — set YOUR_VPS_IP / secrets
+# edit .env — set domain / secrets
 
 export IMAGE_TAG=manual
 docker compose build

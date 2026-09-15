@@ -159,7 +159,7 @@ Quick summary:
 
 1. Create Jenkins credential Secret file ID: `aiteacher-env-file` (from `aiteacher.env.example`)
 2. Pipeline uses root `Jenkinsfile` → builds API/Web images → `docker compose up -d`
-3. UI on port **3000**, API on **8000**
+3. UI on port **3000**, API on **8000** (public site: `http://doxstation.com` via aicoder nginx)
 
 1. Set strong `SECRET_KEY`, disable default demo seed (`SEED_ON_STARTUP=false`) for real production if desired.
 2. Use managed Postgres or the compose `postgres` service (`DATABASE_URL=postgresql+asyncpg://...@postgres:5432/...`).
