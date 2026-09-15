@@ -31,8 +31,8 @@ pipeline {
     )
     string(
       name: 'PUBLIC_API_URL',
-      defaultValue: 'http://187.127.138.86:8000/api/v1',
-      description: 'Browser-facing API URL baked into the web image'
+      defaultValue: 'http://doxstation.com/api/v1',
+      description: 'Browser-facing API URL baked into the web image (via nginx :80)'
     )
     string(
       name: 'ENV_CREDENTIAL_ID',
@@ -171,8 +171,8 @@ Then rebuild.''')
             set +e
             echo "=== Stop previous AI Teacher containers ==="
             docker compose -f docker-compose.yml down --remove-orphans || true
-            docker rm -f aiteacher-api aiteacher-web aiteacher-postgres aiteacher-redis aiteacher-celery-worker aiteacher-celery-beat 2>/dev/null || true
-            docker rmi -f aiteacher-api:latest aiteacher-web:latest 2>/dev/null || true
+            docker rm -f aiteacher-api aiteacher-web aiteacher-nginx aiteacher-postgres aiteacher-redis aiteacher-celery-worker aiteacher-celery-beat 2>/dev/null || true
+            docker rmi -f aiteacher-api:latest aiteacher-web:latest aiteacher-nginx:latest 2>/dev/null || true
             echo "=== Remaining aiteacher images ==="
             docker images | grep aiteacher || echo none
             echo "=== Docker volumes ==="
@@ -206,10 +206,13 @@ Then rebuild.''')
           docker build --no-cache -t ${API_IMAGE} -t ${API_IMAGE_LATEST} ./apps/api
 
           echo "Building Web image (NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL})..."
-          docker build \
+          docker build --no-cache \
             --build-arg "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}" \
             -t ${WEB_IMAGE} -t ${WEB_IMAGE_LATEST} \
             ./apps/web
+
+          echo "Building nginx image (config baked in — no bind mount)..."
+          docker build -t aiteacher-nginx:${BUILD_NUMBER} -t aiteacher-nginx:latest ./deploy/nginx
 
           docker images | grep aiteacher | head -n 20 || docker images | head -n 12
         '''

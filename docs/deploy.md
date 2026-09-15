@@ -52,7 +52,7 @@ Compose service `nginx` (`aiteacher-nginx`) listens on **`NGINX_HOST_PORT` (defa
 - `/` → `web:3000`
 - `/api/` → `api:8000`
 
-Config: [`deploy/nginx/default.conf`](../deploy/nginx/default.conf). No TLS yet — add certificates later (Caddy/certbot) if you want `https://`.
+Config is baked into image `aiteacher-nginx` from [`deploy/nginx/`](../deploy/nginx/) (no host bind mount — required when Jenkins uses the host Docker socket). No TLS yet — add certificates later (Caddy/certbot) if you want `https://`.
 
 ## Manual deploy (without Jenkins)
 
