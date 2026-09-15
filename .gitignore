@@ -16,6 +16,7 @@ build/
 .env.local
 .env.*.local
 aiteacher.env
+aiteacher.env.for-jenkins
 *.pem
 
 # Storage & DB
