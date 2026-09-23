@@ -59,9 +59,17 @@ async function parseError(res: Response) {
 }
 
 function apiBases(): string[] {
-  // Prefer same-origin proxy; fall back to local API ports if an old UI build is open.
   const preferred = (API_URL || "/api/v1").replace(/\/$/, "");
   const extras = ["http://127.0.0.1:8001/api/v1", "http://127.0.0.1:8000/api/v1"];
+  if (typeof window !== "undefined") {
+    // Prefer same-origin /api (nginx → API). Upgrade http→https when the page is HTTPS
+    // so an older build with http://doxstation.com/api/v1 does not hit mixed-content blocks.
+    let abs = preferred;
+    if (abs.startsWith("http://") && window.location.protocol === "https:") {
+      abs = `https://${abs.slice("http://".length)}`;
+    }
+    return [...new Set(["/api/v1", abs, ...extras].filter(Boolean))];
+  }
   return [preferred, ...extras.filter((b) => b !== preferred)];
 }
 

@@ -31,8 +31,8 @@ pipeline {
     )
     string(
       name: 'PUBLIC_API_URL',
-      defaultValue: 'http://doxstation.com/api/v1',
-      description: 'Browser-facing API URL (via aicoder nginx on :80 → API :8000)'
+      defaultValue: 'https://doxstation.com/api/v1',
+      description: 'Browser-facing API URL (must be https when the UI is served on https://doxstation.com)'
     )
     string(
       name: 'ENV_CREDENTIAL_ID',

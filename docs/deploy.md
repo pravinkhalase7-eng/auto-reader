@@ -36,21 +36,21 @@ After changing aicoder nginx config, rebuild/restart `aicoder-nginx` on the VPS,
 4. Set in that file:
    - `SECRET_KEY`
    - `POSTGRES_PASSWORD` / matching `DATABASE_URL`
-   - `CORS_ORIGINS=http://doxstation.com,http://www.doxstation.com,http://187.127.138.86:3000`
-   - `NEXT_PUBLIC_API_URL=http://doxstation.com/api/v1`
+   - `CORS_ORIGINS=https://doxstation.com,https://www.doxstation.com,http://doxstation.com,http://187.127.138.86:3000`
+   - `NEXT_PUBLIC_API_URL=https://doxstation.com/api/v1`
    - `GOOGLE_AI_API_KEY` (required for story pictures; not `GOOGLE_API_KEY`)
 5. Run the job. Optional parameters:
    - `SKIP_DEPLOY` — build + smoke only
    - `FORCE_RECREATE` — recreate containers
    - `RESET_POSTGRES` — **leave unchecked**. Checking it deletes the Postgres volume and wipes users, lessons, and reminders. Use only after a password/`InvalidPasswordError` reset when you want an empty database.
-   - `PUBLIC_API_URL` — override browser API URL for this build (default `http://doxstation.com/api/v1`)
+   - `PUBLIC_API_URL` — override browser API URL for this build (default `https://doxstation.com/api/v1`)
 
 ## After deploy
 
 | Service | URL |
 |---------|-----|
-| UI (domain) | `http://doxstation.com` |
-| API (domain) | `http://doxstation.com/api/v1` |
+| UI (domain) | `https://doxstation.com` |
+| API (domain) | `https://doxstation.com/api/v1` |
 | UI (direct) | `http://YOUR_VPS_IP:3000` |
 | API docs | `http://YOUR_VPS_IP:8000/docs` |
 | Health | `http://YOUR_VPS_IP:8000/api/v1/health` |
