@@ -117,11 +117,29 @@ export async function apiAudio(path: string, body: unknown): Promise<Blob> {
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(`${API_URL}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) await parseError(res);
-  return res.blob();
+  let lastErr: unknown;
+  for (const base of apiBases()) {
+    try {
+      const res = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (res.status === 404 && base.startsWith("/")) {
+        lastErr = new ApiError("API proxy missing on this port.");
+        continue;
+      }
+      if (!res.ok) await parseError(res);
+      return res.blob();
+    } catch (err) {
+      lastErr = err;
+      if (err instanceof TypeError || (err instanceof Error && /failed to fetch/i.test(err.message))) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error
+    ? new ApiError("Cannot reach the API. Please retry.")
+    : new ApiError("Cannot reach the API. Please retry.");
 }

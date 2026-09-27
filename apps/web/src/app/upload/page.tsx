@@ -7,8 +7,8 @@ import { AppShell } from "@/components/app-shell";
 import { ProcessingAnimation } from "@/components/processing-animation";
 import { UploadZone } from "@/components/upload-zone";
 import { Button } from "@/components/ui/button";
-import { api, getToken } from "@/lib/api";
-import { API_URL, cn } from "@/lib/utils";
+import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { JobStatus, UploadResponse } from "@/types";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -65,16 +65,12 @@ export default function UploadPage() {
     try {
       const fd = new FormData();
       files.forEach((f) => fd.append("files", f));
-      const res = await fetch(`${API_URL}/lessons/upload`, {
+      // Use api() so HTTPS pages hit same-origin /api (not baked http:// URL / mixed content).
+      const data = await api<UploadResponse>("/lessons/upload", {
         method: "POST",
-        headers: { Authorization: `Bearer ${getToken()}` },
         body: fd,
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail?.detail || data.detail || "Upload failed");
-      }
-      await startFromJob((await res.json()) as UploadResponse);
+      await startFromJob(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
